@@ -20,6 +20,11 @@
   #hud { position:fixed; left:10px; top:10px; font:12px/1.5 ui-monospace,Consolas,monospace;
          text-shadow:1px 1px 2px #000; pointer-events:none; white-space:pre; opacity:.9; }
 
+  #mineBar { position:fixed; left:50%; top:calc(50% + 20px); transform:translateX(-50%);
+             width:120px; height:6px; background:rgba(0,0,0,.4); border:1px solid rgba(255,255,255,.3);
+             border-radius:3px; overflow:hidden; opacity:0; pointer-events:none; transition:opacity .1s; }
+  #mineBarFill { width:0%; height:100%; background:#e8d24a; }
+
   #hotbar { position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
             display:flex; gap:4px; padding:4px; background:rgba(0,0,0,.35);
             border:2px solid rgba(0,0,0,.5); border-radius:4px; pointer-events:none; }
@@ -80,12 +85,35 @@
   #reset { margin-top:14px; font-size:11px; opacity:.45; background:none; border:none;
            color:#fff; cursor:pointer; text-decoration:underline; }
   #reset:hover { opacity:.8; }
+
+  #craftPanel { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+                background:rgba(6,10,18,.82); backdrop-filter:blur(3px); z-index:12; }
+  #craftPanel.hide { display:none; }
+  #craftBox { width:420px; max-width:90vw; padding:22px 26px; background:rgba(20,24,34,.6);
+              border:1px solid rgba(255,255,255,.15); border-radius:8px; }
+  #craftBox h2 { letter-spacing:3px; margin-bottom:4px; font-size:20px; }
+  #craftBox .sub { opacity:.6; font-size:12px; margin-bottom:14px; }
+  #craftMats { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; opacity:.85;
+               margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,.12); }
+  .recipe { display:flex; align-items:center; justify-content:space-between; gap:10px;
+            padding:8px 0; border-bottom:1px solid rgba(255,255,255,.08); }
+  .recipe:last-child { border-bottom:none; }
+  .recipe .info { font-size:13px; }
+  .recipe .cost { opacity:.6; font-size:11px; margin-top:2px; }
+  .recipe button { font-size:12px; padding:7px 14px; border:none; border-radius:5px; cursor:pointer;
+                   background:#4a7d9d; color:#fff; border-bottom:3px solid #2f5a6b; letter-spacing:.5px; }
+  .recipe button:hover:not(:disabled) { background:#5a95b8; }
+  .recipe button:disabled { background:#3a3f4a; border-bottom-color:#22252c; opacity:.5; cursor:not-allowed; }
+  #craftClose { margin-top:6px; font-size:11px; opacity:.5; background:none; border:none;
+                color:#fff; cursor:pointer; text-decoration:underline; }
+  #craftClose:hover { opacity:.85; }
 </style>
 </head>
 <body>
 <canvas id="app"></canvas>
 
 <div id="crosshair"></div>
+<div id="mineBar"><div id="mineBarFill"></div></div>
 <div id="hud"></div>
 <div id="name"></div>
 <div id="hotbar"></div>
@@ -102,19 +130,31 @@
       <b>Clic izq.</b><span>Romper bloque</span>
       <b>Clic der.</b><span>Colocar bloque</span>
       <b>Clic central</b><span>Copiar bloque</span>
-      <b>1 - 9 / Rueda</b><span>Elegir bloque</span>
+      <b>0 - 9 / Rueda</b><span>Elegir bloque/herramienta</span>
       <b>F</b><span>Modo vuelo</span>
       <b>E</b><span>Comer una manzana</span>
+      <b>C</b><span>Crafteo</span>
+      <b>Clic der. en cama</b><span>Dormir (de noche)</span>
       <b>F3</b><span>Info de depuración</span>
       <b>[ ]</b><span>Distancia de dibujado</span>
       <b>Esc</b><span>Pausa</span>
     </div>
     <div class="sub" style="margin-top:-8px;margin-bottom:22px;">
       Modo supervivencia: cuida tu vida ♥, tu hambre 🍗 y no te ahogues bajo el agua.
-      Rompe hojas para conseguir manzanas.
+      Miná madera/piedra/minerales y crafteá herramientas y una cama.
     </div>
     <button id="play">JUGAR</button><br>
     <button id="reset">borrar mundo y empezar de cero</button>
+  </div>
+</div>
+
+<div id="craftPanel" class="hide">
+  <div id="craftBox">
+    <h2>CRAFTEO</h2>
+    <div class="sub">el resultado se coloca en tu slot de hotbar seleccionado</div>
+    <div id="craftMats"></div>
+    <div id="craftList"></div>
+    <button id="craftClose">cerrar (C)</button>
   </div>
 </div>
 
@@ -175,12 +215,54 @@ const BLOCKS = [
   { name:'Mineral de diamante', t:[19,19,19], opaque:true, layer:0 },
   { name:'Piedra luminosa', t:[20,20,20], opaque:true, layer:0, light:13 },
   { name:'Lava', t:[21,21,21], opaque:true, layer:0, liquid:true, light:12 },
+  { name:'Cama', t:[22,22,22], opaque:false, layer:1, noMesh:true },
 ];
 const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
       PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14,
-      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20;
+      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20, BED=21;
 
 const HOTBAR = [GRASS, STONE, COBBLE, DIRT, SAND, LOG, PLANKS, GLASS, BRICK, LIGHTSTONE];
+
+/* ============================================================
+   1b. CRAFTEO: dureza de bloques, herramientas y recetas
+   ============================================================ */
+// tiempo base (segundos) para romper cada bloque a mano
+const HARDNESS = {
+  [GRASS]:0.4, [DIRT]:0.4, [SAND]:0.3, [GRAVEL]:0.5, [SNOW]:0.2, [LEAVES]:0.2,
+  [LOG]:0.8, [PLANKS]:0.6, [GLASS]:0.4, [BRICK]:1.2,
+  [STONE]:1.2, [COBBLE]:1.4, [LIGHTSTONE]:1.0,
+  [COAL_ORE]:1.5, [IRON_ORE]:2.2, [GOLD_ORE]:2.0, [DIAMOND_ORE]:3.0,
+};
+// bloques "de piedra": sin pico son muy lentos de romper
+const STONE_CATEGORY = new Set([STONE, COBBLE, LIGHTSTONE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE]);
+// nivel de pico requerido para RECOGER el mineral (el bloque igual se rompe sin el pico correcto)
+const ORE_TIER = { [STONE]:1, [COBBLE]:1, [COAL_ORE]:1, [IRON_ORE]:2, [GOLD_ORE]:3, [DIAMOND_ORE]:3 };
+// qué material otorga cada bloque al recogerlo
+const DROP_MAP  = { [LOG]:'wood', [STONE]:'stone', [COBBLE]:'stone', [COAL_ORE]:'coal', [IRON_ORE]:'iron', [GOLD_ORE]:'gold', [DIAMOND_ORE]:'diamond' };
+const DROP_NAME = { wood:'Madera', stone:'Piedra', coal:'Carbón', iron:'Hierro', gold:'Oro', diamond:'Diamante' };
+
+// herramientas: id negativo para distinguirlas de los bloques (id>=0) dentro del hotbar
+const TOOL_PICK_WOOD=-1, TOOL_PICK_STONE=-2, TOOL_PICK_IRON=-3,
+      TOOL_SWORD_WOOD=-4, TOOL_SWORD_STONE=-5, TOOL_SWORD_IRON=-6;
+const TOOL_DEFS = {
+  [TOOL_PICK_WOOD]:  { name:'Pico de madera',  kind:'pickaxe', tier:1, speed:0.5,  color:0x8a5a34 },
+  [TOOL_PICK_STONE]: { name:'Pico de piedra',  kind:'pickaxe', tier:2, speed:0.28, color:0x9a9a9a },
+  [TOOL_PICK_IRON]:  { name:'Pico de hierro',  kind:'pickaxe', tier:3, speed:0.16, color:0xd7d7d7 },
+  [TOOL_SWORD_WOOD]: { name:'Espada de madera',kind:'sword',   tier:1, dmg:6,  color:0x8a5a34 },
+  [TOOL_SWORD_STONE]:{ name:'Espada de piedra',kind:'sword',   tier:2, dmg:8,  color:0x9a9a9a },
+  [TOOL_SWORD_IRON]: { name:'Espada de hierro',kind:'sword',   tier:3, dmg:11, color:0xd7d7d7 },
+};
+// recetas: cuestan materiales recolectados y el resultado se coloca en el slot del hotbar
+// que tengas seleccionado en ese momento (igual que "copiar bloque" con el clic central)
+const RECIPES = [
+  { name:'Pico de madera',   cost:{wood:3},          result:TOOL_PICK_WOOD  },
+  { name:'Pico de piedra',   cost:{wood:2,stone:3},  result:TOOL_PICK_STONE },
+  { name:'Pico de hierro',   cost:{wood:2,iron:3},   result:TOOL_PICK_IRON  },
+  { name:'Espada de madera', cost:{wood:2},          result:TOOL_SWORD_WOOD  },
+  { name:'Espada de piedra', cost:{wood:1,stone:2},  result:TOOL_SWORD_STONE },
+  { name:'Espada de hierro', cost:{wood:1,iron:2},   result:TOOL_SWORD_IRON  },
+  { name:'Cama',             cost:{wood:4},          result:BED },
+];
 
 /* ============================================================
    2. ATLAS DE TEXTURAS (dibujado por código, sin archivos)
@@ -301,6 +383,10 @@ const TILE_DRAW = [
     for(let i=0;i<10;i++){ const x=rnd()*TILE|0, y=rnd()*TILE|0, w=4+(rnd()*8|0);
       g.fillStyle=shade(255,168,40,1); g.fillRect(x,y,w,2); }
     for(let i=0;i<16;i++) px(rnd()*TILE|0,rnd()*TILE|0,shade(90,20,10,1)); },
+  // 22 cama (solo para el icono del hotbar; en el mundo se dibuja como malla aparte)
+  (g,rnd,px)=>{ g.fillStyle='#c94141'; g.fillRect(0,10,32,20);
+    g.fillStyle='#e8e8e8'; g.fillRect(0,10,10,10);
+    g.fillStyle='rgba(0,0,0,.25)'; g.fillRect(0,28,32,2); },
 ];
 
 function buildAtlas(){
@@ -341,7 +427,7 @@ const ATLAS = buildAtlas();
 const mesherWorker = new Worker('mesher.worker.js');
 mesherWorker.postMessage({
   type: 'init', CX, CY, CZ, CXZ, BEDROCK,
-  BLOCKS: BLOCKS.map(b => b ? { opaque:b.opaque, layer:b.layer, t:b.t, light:b.light||0 } : null),
+  BLOCKS: BLOCKS.map(b => b ? { opaque:b.opaque, layer:b.layer, t:b.t, light:b.light||0, noMesh:!!b.noMesh } : null),
   TILEUV,
 });
 let meshReqSeq = 0;
@@ -382,6 +468,26 @@ function blockIcon(id){
   g.drawImage(ATLAS.canvas, col*CELL+PAD, row*CELL+PAD, TILE, TILE, 0,0,TILE,TILE);
   return c.toDataURL();
 }
+// icono simple dibujado a mano para herramientas (no vienen del atlas de bloques)
+function toolIcon(id){
+  const t = TOOL_DEFS[id];
+  const c = document.createElement('canvas'); c.width=c.height=TILE;
+  const g = c.getContext('2d');
+  const colHex = '#' + t.color.toString(16).padStart(6,'0');
+  g.strokeStyle = '#5b3a1e'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(7,25); g.lineTo(22,10); g.stroke();
+  g.fillStyle = colHex;
+  if (t.kind === 'pickaxe'){
+    g.beginPath();
+    g.moveTo(6,11); g.lineTo(17,2); g.lineTo(27,10); g.lineTo(22,15); g.lineTo(15,9); g.lineTo(11,14);
+    g.closePath(); g.fill();
+  } else {
+    g.fillRect(14,3,4,17);
+    g.fillStyle = '#3a3a3a'; g.fillRect(9,20,14,3);
+  }
+  return c.toDataURL();
+}
+function itemIcon(id){ return id < 0 ? toolIcon(id) : blockIcon(id); }
 
 /* ============================================================
    3. RUIDO Y GENERACIÓN DE TERRENO
@@ -695,7 +801,13 @@ function generate(ch){
   }
   // aplicar modificaciones guardadas
   const e = edits.get(ckey(ch.cx,ch.cz));
-  if (e) for(const [i,id] of e) d[i] = id;
+  if (e) for(const [i,id] of e){
+    d[i] = id;
+    if (id === BED){ // las ediciones no pasan por setBlock: recreamos la malla de la cama a mano
+      const lx=i%CX, lz=((i/CX)|0)%CZ, ly=(i/CXZ)|0;
+      syncBedMesh(ox+lx, ly, oz+lz, BED);
+    }
+  }
 }
 
 function getChunk(cx,cz,create=true){
@@ -720,7 +832,9 @@ function setBlock(wx,wy,wz,id){
   const c = getChunk(cx,cz);
   const lx = wx-cx*CX, lz = wz-cz*CZ, i = li(lx,wy,lz);
   if (c.data[i] === id) return;
+  const prevId = c.data[i];
   c.data[i] = id;
+  if (prevId === BED || id === BED) syncBedMesh(wx,wy,wz,id);
   const k = ckey(cx,cz);
   if (!edits.has(k)) edits.set(k, new Map());
   edits.get(k).set(i,id);
@@ -915,6 +1029,48 @@ hand.position.set(0.42,-0.34,-0.62);
 hand.rotation.set(0.25,-0.7,0.12);
 camera.add(hand); scene.add(camera);
 
+// herramienta en la mano (pico/espada): mango + cabeza, se muestra en vez del bloque
+// cuando el slot seleccionado del hotbar tiene una herramienta (id negativo)
+const handToolHandle = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.5,0.08),
+  new THREE.MeshLambertMaterial({ color:0x6b4a2c, fog:false }));
+handToolHandle.position.set(0,-0.2,0);
+const handToolHead = new THREE.Mesh(new THREE.BoxGeometry(0.3,0.14,0.14),
+  new THREE.MeshLambertMaterial({ color:0x9a9a9a, fog:false }));
+handToolHead.position.set(0,0.08,0);
+const handToolGroup = new THREE.Group();
+handToolGroup.add(handToolHandle, handToolHead);
+handToolGroup.scale.setScalar(0.34);
+handToolGroup.position.set(0.42,-0.34,-0.62);
+handToolGroup.rotation.set(0.25,-0.7,0.12);
+handToolGroup.visible = false;
+camera.add(handToolGroup);
+
+// camas: no son un cubo completo, se dibujan como malla propia fuera del sistema de chunks
+const BED_MESHES = new Map();
+function buildBedMesh(yaw){
+  const g = new THREE.Group();
+  const mattress = new THREE.Mesh(new THREE.BoxGeometry(0.94,0.55,0.94),
+    new THREE.MeshLambertMaterial({ color:0xc94141 }));
+  mattress.position.set(0,-0.22,0);
+  const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.2,0.3),
+    new THREE.MeshLambertMaterial({ color:0xe8e8e8 }));
+  pillow.position.set(0,0.03,-0.3);
+  g.add(mattress, pillow);
+  g.rotation.y = yaw;
+  return g;
+}
+function syncBedMesh(wx,wy,wz,id){
+  const k = wx+','+wy+','+wz;
+  const old = BED_MESHES.get(k);
+  if (old){ scene.remove(old); BED_MESHES.delete(k); }
+  if (id === BED){
+    const m = buildBedMesh(player.yaw);
+    m.position.set(wx+0.5, wy+0.28, wz+0.5);
+    scene.add(m);
+    BED_MESHES.set(k, m);
+  }
+}
+
 // partículas de rotura
 const PARTS = [];
 {
@@ -1067,13 +1223,61 @@ const player = {
   invuln: 0, exertion: 0, dead: false,
   spawnX: 8, spawnZ: 8,
 };
-const inv = { apple: 0 };
+const inv = { apple:0, wood:0, stone:0, coal:0, iron:0, gold:0, diamond:0 };
 const keys = Object.create(null);
 let sel = 0, showDebug = false;
 
 const overlay = document.getElementById('overlay');
 const hudEl   = document.getElementById('hud');
 const nameEl  = document.getElementById('name');
+const mineBarWrap = document.getElementById('mineBar');
+const mineBarFill = document.getElementById('mineBarFill');
+
+/* --- panel de crafteo --- */
+let craftOpen = false;
+const craftPanelEl = document.getElementById('craftPanel');
+const craftListEl  = document.getElementById('craftList');
+const craftMatsEl  = document.getElementById('craftMats');
+
+function openCraft(){
+  if (player.dead) return;
+  craftOpen = true;
+  renderCraftPanel();
+  craftPanelEl.classList.remove('hide');
+  document.exitPointerLock();
+}
+function closeCraft(){
+  craftOpen = false;
+  craftPanelEl.classList.add('hide');
+  lock();
+}
+document.getElementById('craftClose').onclick = e => { e.stopPropagation(); closeCraft(); };
+
+function renderCraftPanel(){
+  craftMatsEl.innerHTML = ['wood','stone','coal','iron','gold','diamond']
+    .map(k => `<span>${DROP_NAME[k]}: ${inv[k]||0}</span>`).join('');
+  craftListEl.innerHTML = '';
+  for(const r of RECIPES){
+    const have = Object.entries(r.cost).every(([k,n]) => (inv[k]||0) >= n);
+    const costTxt = Object.entries(r.cost).map(([k,n]) => `${n} ${DROP_NAME[k]}`).join(' + ');
+    const row = document.createElement('div');
+    row.className = 'recipe';
+    row.innerHTML = `<div class="info">${r.name}<div class="cost">${costTxt}</div></div>` +
+      `<button ${have ? '' : 'disabled'}>Craftear</button>`;
+    row.querySelector('button').onclick = () => craftRecipe(r);
+    craftListEl.appendChild(row);
+  }
+}
+function craftRecipe(r){
+  for(const [k,n] of Object.entries(r.cost)) if ((inv[k]||0) < n) return;
+  for(const [k,n] of Object.entries(r.cost)) inv[k] -= n;
+  HOTBAR[sel] = r.result;
+  const slot = document.querySelectorAll('.slot')[sel];
+  slot.style.backgroundImage = `url(${itemIcon(r.result)})`;
+  setSel(sel);
+  toast('Crafteado: ' + r.name);
+  renderCraftPanel();
+}
 
 document.getElementById('play').onclick = e => { e.stopPropagation(); lock(); };
 overlay.onclick = () => lock();
@@ -1089,6 +1293,8 @@ document.addEventListener('pointerlockchange', () => {
   if (player.dead){
     overlay.classList.add('hide');
     deathOverlay.classList.remove('hide');
+  } else if (craftOpen){
+    overlay.classList.add('hide');
   } else {
     overlay.classList.toggle('hide', locked);
     deathOverlay.classList.add('hide');
@@ -1116,6 +1322,10 @@ addEventListener('keydown', e => {
   }
   if (k === 'KeyF'){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
   if (k === 'KeyE'){ eatApple(); }
+  if (k === 'KeyC'){
+    if (craftOpen) closeCraft();
+    else if (document.pointerLockElement === canvas) openCraft();
+  }
   if (k === 'F3'){ showDebug = !showDebug; hudEl.style.display = showDebug ? '' : 'none'; e.preventDefault(); }
   if (k.startsWith('Digit')){ const n = +k.slice(5); if (n>=1 && n<=9) setSel(n-1); else if (n===0) setSel(9); }
   if (k === 'BracketLeft')  setRenderDist(RENDER_DIST-1);
@@ -1139,9 +1349,21 @@ function toast(txt){ nameEl.textContent = txt; nameEl.classList.add('show'); toa
 function setSel(i){
   sel = i;
   document.querySelectorAll('.slot').forEach((s,n) => s.classList.toggle('sel', n===sel));
-  hand.geometry.dispose();
-  hand.geometry = cubeGeometry(HOTBAR[sel]);
-  toast(BLOCKS[HOTBAR[sel]].name);
+  const id = HOTBAR[sel];
+  if (id < 0){
+    const t = TOOL_DEFS[id];
+    hand.visible = false;
+    handToolGroup.visible = true;
+    handToolHead.material.color.setHex(t.color);
+    handToolHead.scale.set(1, 1, t.kind==='sword' ? 0.55 : 1);
+    toast(t.name);
+  } else {
+    handToolGroup.visible = false;
+    hand.visible = true;
+    hand.geometry.dispose();
+    hand.geometry = cubeGeometry(id);
+    toast(BLOCKS[id].name);
+  }
 }
 function setRenderDist(r){
   RENDER_DIST = Math.max(3, Math.min(14, r));
@@ -1157,7 +1379,7 @@ function setRenderDist(r){
   HOTBAR.forEach((id,i) => {
     const d = document.createElement('div');
     d.className = 'slot';
-    d.style.backgroundImage = `url(${blockIcon(id)})`;
+    d.style.backgroundImage = `url(${itemIcon(id)})`;
     d.innerHTML = `<span>${i+1}</span>`;
     bar.appendChild(d);
   });
@@ -1314,6 +1536,8 @@ function physics(dt){
     hand.position.set(0.42, -0.34 + bob, -0.62 + Math.abs(bob)*sway);
     hand.rotation.set(0.25, -0.7, 0.12);
   }
+  handToolGroup.position.copy(hand.position);
+  handToolGroup.rotation.copy(hand.rotation);
 }
 
 /* ============================================================
@@ -1367,31 +1591,83 @@ addEventListener('mousedown', e => {
 });
 addEventListener('contextmenu', e => e.preventDefault());
 
-function doBreak(){
-  if (player.dead) return;
-  const target = raycastEntity(4.5);
-  if (target){ attackEntity(target); return; }
-  const h = raycast(6);
-  if (!h || BLOCKS[h.id].unbreakable) return;
+function activeTool(){
+  const id = HOTBAR[sel];
+  return id < 0 ? TOOL_DEFS[id] : null;
+}
+// tiempo de romper: los bloques "de piedra" son muy lentos a mano y bajan mucho
+// con el pico correcto; el resto no depende de la herramienta
+function miningTime(id){
+  const base = HARDNESS[id] ?? 0.5;
+  if (!STONE_CATEGORY.has(id)) return base;
+  const tool = activeTool();
+  if (!tool || tool.kind !== 'pickaxe') return base*5;
+  return base*tool.speed;
+}
+function finishBreak(h){
   spawnParticles(h.x, h.y, h.z, h.id);
+  const tool = activeTool();
+  const reqTier = ORE_TIER[h.id] || 0;
+  const canCollect = reqTier===0 || (tool && tool.kind==='pickaxe' && tool.tier >= reqTier);
   setBlock(h.x, h.y, h.z, AIR);
   spreadFluidFrom(h.x, h.y, h.z);
   sndBreak(h.id);
+  const key = DROP_MAP[h.id];
+  if (key){
+    if (canCollect){ inv[key] = (inv[key]||0) + 1; toast('+1 ' + DROP_NAME[key]); }
+    else toast('Necesitás un pico mejor para recoger esto');
+  }
   if (h.id === LEAVES && Math.random() < 0.12){
     inv.apple++;
     toast('+1 Manzana');
+  }
+}
+
+let miningKey = null, miningProgress = 0;
+function resetMining(){
+  if (miningKey === null) return;
+  miningKey = null; miningProgress = 0;
+  mineBarWrap.style.opacity = 0;
+}
+function updateMining(dt){
+  if (player.dead) return;
+  const h = raycast(6);
+  if (!h || BLOCKS[h.id].unbreakable){ resetMining(); return; }
+  const key = h.x+','+h.y+','+h.z;
+  if (miningKey !== key){ miningKey = key; miningProgress = 0; }
+  miningProgress += dt;
+  const need = miningTime(h.id);
+  mineBarWrap.style.opacity = 1;
+  mineBarFill.style.width = Math.min(100, miningProgress/need*100) + '%';
+  if (miningProgress >= need){
+    finishBreak(h);
+    resetMining();
   }
 }
 function doPlace(){
   if (player.dead) return;
   const h = raycast(6);
   if (!h) return;
+  if (h.id === BED){ trySleep(); return; }
+  const heldId = HOTBAR[sel];
+  if (heldId < 0) return; // las herramientas no se colocan
   const x = h.x + h.nx, y = h.y + h.ny, z = h.z + h.nz;
   const cur = getBlock(x,y,z);
   if (cur !== AIR && !BLOCKS[cur].liquid) return;
   if (boxBlocksPlayer(x,y,z)) return;
-  setBlock(x, y, z, HOTBAR[sel]);
-  sndPlace(HOTBAR[sel]);
+  setBlock(x, y, z, heldId);
+  sndPlace(heldId);
+}
+
+// dormir: solo de noche, sin monstruos cerca; pasa al amanecer y fija tu punto de reaparición
+function trySleep(){
+  if (dayAmt > 0.32){ toast('Solo se puede dormir de noche'); return; }
+  const nearHostile = ENTITIES.some(e => !e.dead && e.cfg.hostile &&
+    Math.hypot(e.pos.x-player.pos.x, e.pos.z-player.pos.z) < 16);
+  if (nearHostile){ toast('Hay monstruos cerca, no podés dormir'); return; }
+  dayTime = 0.25;
+  player.spawnX = Math.floor(player.pos.x); player.spawnZ = Math.floor(player.pos.z);
+  toast('Dormiste hasta el amanecer');
 }
 
 /* ============================================================
@@ -1448,7 +1724,9 @@ function save(){
       p: [player.pos.x, player.pos.y, player.pos.z],
       r: [player.yaw, player.pitch],
       sp: [player.spawnX, player.spawnZ],
-      hp: player.health, hg: player.hunger, ar: player.air, apple: inv.apple,
+      hp: player.health, hg: player.hunger, ar: player.air,
+      inv: { apple:inv.apple, wood:inv.wood, stone:inv.stone, coal:inv.coal, iron:inv.iron, gold:inv.gold, diamond:inv.diamond },
+      hotbar: HOTBAR,
       t: dayTime, fly: player.fly, sel
     }));
   } catch(err){ /* cuota llena: se ignora */ }
@@ -1464,7 +1742,11 @@ function load(){
     player.yaw = s.r[0]; player.pitch = s.r[1];
     if (s.sp){ player.spawnX = s.sp[0]; player.spawnZ = s.sp[1]; }
     player.health = s.hp ?? 20; player.hunger = s.hg ?? 20; player.air = s.ar ?? 20;
-    inv.apple = s.apple || 0;
+    const si = s.inv || {};
+    inv.apple = si.apple ?? s.apple ?? 0;
+    inv.wood = si.wood||0; inv.stone = si.stone||0; inv.coal = si.coal||0;
+    inv.iron = si.iron||0; inv.gold = si.gold||0; inv.diamond = si.diamond||0;
+    if (Array.isArray(s.hotbar) && s.hotbar.length) HOTBAR.splice(0, HOTBAR.length, ...s.hotbar);
     dayTime = s.t ?? 0.28;
     player.fly = !!s.fly;
     sel = s.sel || 0;
@@ -1518,6 +1800,8 @@ if (!loaded){
     toast('Te sacamos del agua/lava: apareces en tierra firme');
   }
 }
+// repinta los iconos del hotbar por si la partida guardada trae herramientas crafteadas
+document.querySelectorAll('.slot').forEach((s,i) => { s.style.backgroundImage = `url(${itemIcon(HOTBAR[i])})`; });
 setSel(sel);
 hudEl.style.display = 'none';
 addEventListener('beforeunload', save);
@@ -1842,7 +2126,8 @@ function killEntity(e){
   sfx(120, 0.25, 0.3, 0.6);
 }
 function attackEntity(e){
-  e.hp -= 4;
+  const tool = activeTool();
+  e.hp -= (tool && tool.kind === 'sword') ? tool.dmg : 4;
   sfx(180, 0.12, 0.3, 0.8);
   const dx = e.pos.x-player.pos.x, dz = e.pos.z-player.pos.z, L = Math.hypot(dx,dz) || 1;
   e.vel.x += dx/L*3.2; e.vel.z += dz/L*3.2; e.vel.y = 3;
@@ -2034,7 +2319,17 @@ function frame(now){
     survivalTick(dt);
 
     breakCooldown -= dt; placeCooldown -= dt;
-    if (mouseDown[0] && breakCooldown <= 0){ doBreak(); breakCooldown = 0.22; }
+    if (mouseDown[0]){
+      const target = raycastEntity(4.5);
+      if (target){
+        resetMining();
+        if (breakCooldown <= 0){ attackEntity(target); breakCooldown = 0.3; }
+      } else {
+        updateMining(dt);
+      }
+    } else {
+      resetMining();
+    }
     if (mouseDown[2] && placeCooldown <= 0){ doPlace(); placeCooldown = 0.22; }
   }
 
@@ -2122,6 +2417,7 @@ function frame(now){
       `dist ${RENDER_DIST}   ${player.fly ? 'volando' : (player.inLava ? 'en lava' : (player.inWater ? 'en el agua' : (player.onGround ? 'en el suelo' : 'cayendo')))}\n` +
       `Vida ${player.health.toFixed(1)}/${player.maxHealth}   Hambre ${player.hunger.toFixed(1)}/${player.maxHunger}   Aire ${player.air.toFixed(1)}/${player.maxAir}   Manzanas ${inv.apple}\n` +
       `Entidades ${ENTITIES.length}   Aldeas ${VILLAGES.length}\n` +
+      `Madera ${inv.wood}  Piedra ${inv.stone}  Carbón ${inv.coal}  Hierro ${inv.iron}  Oro ${inv.gold}  Diamante ${inv.diamond}\n` +
       `Semilla ${SEED}`;
   }
 
