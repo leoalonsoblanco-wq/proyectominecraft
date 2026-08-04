@@ -918,8 +918,8 @@ function collide(axis, delta){
 let stepTimer = 0, wasInWater = false, fallDistance = 0, swimRoll = 0;
 function physics(dt){
   const p = player;
-  const head = getBlock(Math.floor(p.x), Math.floor(p.y + p.EYE), Math.floor(p.z));
-  const feet = getBlock(Math.floor(p.x), Math.floor(p.y + 0.2), Math.floor(p.z));
+  const head = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y + p.EYE), Math.floor(p.pos.z));
+  const feet = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y + 0.2), Math.floor(p.pos.z));
   p.inWater = (head === WATER || feet === WATER);
   p.headSubmerged = (head === WATER);
   if (p.inWater && !wasInWater) sndSplash();
@@ -985,7 +985,7 @@ function physics(dt){
   // daño por caída (se acumula mientras se desciende, se aplica al aterrizar)
   if (p.onGround){
     if (fallDistance > 3){
-      const landedInWater = getBlock(Math.floor(p.x), Math.floor(p.y-0.1), Math.floor(p.z)) === WATER || p.inWater;
+      const landedInWater = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y-0.1), Math.floor(p.pos.z)) === WATER || p.inWater;
       if (!landedInWater) damagePlayer(Math.floor(fallDistance-3), 'caída');
     }
     fallDistance = 0;
@@ -1059,9 +1059,9 @@ function raycast(maxDist){
 }
 
 function boxBlocksPlayer(x,y,z){
-  const p = player, W = p.W;
+  const p = player.pos, W = player.W;
   return (x+1 > p.x-W && x < p.x+W) &&
-         (y+1 > p.y   && y < p.y+p.H) &&
+         (y+1 > p.y   && y < p.y+player.H) &&
          (z+1 > p.z-W && z < p.z+W);
 }
 
