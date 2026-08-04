@@ -268,17 +268,18 @@ const BLOCKS = [
   { name:'Piedra luminosa', t:[20,20,20], opaque:true, layer:0, light:13 },
   { name:'Lava', t:[21,21,21], opaque:true, layer:0, liquid:true, light:12 },
   { name:'Cama', t:[22,22,22], opaque:false, layer:1, noMesh:true },
+  { name:'Cofre', t:[23,23,23], opaque:true, layer:0 },
 ];
 const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
       PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14,
-      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20, BED=21;
+      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20, BED=21, CHEST=22;
 
 const HOTBAR = [0,0,0,0,0,0,0,0,0,0]; // supervivencia: empezás sin nada, hay que minar/craftear
 // cuántas unidades hay en cada slot (en creativo no se gasta nunca: Infinity)
 let HOTBAR_COUNT = HOTBAR.map(() => 0);
 // creativo: todos los bloques del juego (menos la roca madre, que es especial/indestructible)
 const HOTBAR_CREATIVE = [GRASS, DIRT, STONE, COBBLE, SAND, GRAVEL, SNOW, LOG, LEAVES, PLANKS,
-  GLASS, BRICK, WATER, LAVA, BED, LIGHTSTONE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE];
+  GLASS, BRICK, WATER, LAVA, BED, CHEST, LIGHTSTONE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE];
 
 /* ============================================================
    1b. CRAFTEO: dureza de bloques, herramientas y recetas
@@ -286,7 +287,7 @@ const HOTBAR_CREATIVE = [GRASS, DIRT, STONE, COBBLE, SAND, GRAVEL, SNOW, LOG, LE
 // tiempo base (segundos) para romper cada bloque a mano
 const HARDNESS = {
   [GRASS]:0.4, [DIRT]:0.4, [SAND]:0.3, [GRAVEL]:0.5, [SNOW]:0.2, [LEAVES]:0.2,
-  [LOG]:0.8, [PLANKS]:0.6, [GLASS]:0.4, [BRICK]:1.2,
+  [LOG]:0.8, [PLANKS]:0.6, [GLASS]:0.4, [BRICK]:1.2, [CHEST]:1.0,
   [STONE]:1.2, [COBBLE]:1.4, [LIGHTSTONE]:1.0,
   [COAL_ORE]:1.5, [IRON_ORE]:2.2, [GOLD_ORE]:2.0, [DIAMOND_ORE]:3.0,
 };
@@ -330,6 +331,33 @@ const RECIPES = [
   { name:'Espada de hierro', cost:{wood:1,iron:2},   result:TOOL_SWORD_IRON  },
   { name:'Cama',             cost:{wood:4},          result:BED },
 ];
+// botín de los cofres de aldea: cada cofre da 2-3 tandas al azar de esta tabla (con peso)
+const CHEST_LOOT = [
+  { key:'wood',    min:1, max:4, w:20 },
+  { key:'stone',   min:1, max:4, w:18 },
+  { key:'coal',    min:1, max:3, w:16 },
+  { key:'apple',   min:1, max:3, w:16 },
+  { key:'iron',    min:1, max:2, w:10 },
+  { key:'beef',    min:1, max:2, w:8  },
+  { key:'pork',    min:1, max:2, w:8  },
+  { key:'gold',    min:1, max:1, w:5  },
+  { key:'diamond', min:1, max:1, w:2  },
+];
+function openChest(x,y,z){
+  const totalW = CHEST_LOOT.reduce((s,l)=>s+l.w,0);
+  const rolls = 2 + Math.floor(Math.random()*2);
+  const gotten = [];
+  for(let i=0;i<rolls;i++){
+    let r = Math.random()*totalW, pick = CHEST_LOOT[CHEST_LOOT.length-1];
+    for(const l of CHEST_LOOT){ if (r < l.w){ pick = l; break; } r -= l.w; }
+    const qty = pick.min + Math.floor(Math.random()*(pick.max-pick.min+1));
+    inv[pick.key] = (inv[pick.key]||0) + qty;
+    gotten.push('+' + qty + ' ' + DROP_NAME[pick.key]);
+  }
+  toast('Cofre: ' + gotten.join(', '));
+  sfx(700, 0.15, 0.25, 1.4);
+  setBlock(x, y, z, AIR);
+}
 
 /* ============================================================
    2. ATLAS DE TEXTURAS (dibujado por código, sin archivos)
@@ -454,6 +482,12 @@ const TILE_DRAW = [
   (g,rnd,px)=>{ g.fillStyle='#c94141'; g.fillRect(0,10,32,20);
     g.fillStyle='#e8e8e8'; g.fillRect(0,10,10,10);
     g.fillStyle='rgba(0,0,0,.25)'; g.fillRect(0,28,32,2); },
+  // 23 cofre
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,150,102,58,0.14);
+    g.fillStyle='rgba(70,46,24,.6)'; g.fillRect(0,14,32,3);
+    g.fillStyle='rgba(40,26,14,.7)'; g.fillRect(0,0,3,32); g.fillRect(29,0,3,32);
+    g.fillStyle='#caa24a'; g.fillRect(13,12,6,7);
+    g.fillStyle='#5a3c1e'; g.fillRect(15,15,2,3); },
 ];
 
 function buildAtlas(){
@@ -912,7 +946,7 @@ function generate(ch){
   {
     const forced = FORCE_VILLAGE.has(ckey(ch.cx,ch.cz));
     const region = fbm2(ch.cx*0.05, ch.cz*0.05, 2, 501);
-    if (forced || (region > 0.62 && ihash(ch.cx,4242,ch.cz) < 0.55)){
+    if (forced || (region > 0.44 && ihash(ch.cx,4242,ch.cz) < 0.6)){
       const wx = ox+8, wz = oz+8;
       const info = columnInfo(wx,wz);
       if (forced || (info.surf === GRASS && info.h > SEA+1)){
@@ -920,6 +954,8 @@ function generate(ch){
         picked.build(d, 8, 8, info.h+1);
         if (picked.isHome){
           VILLAGES.push({ x: wx+0.5, y: info.h+2, z: oz+8+picked.halfZ+0.5, pop: 2+Math.floor(ihash(ch.cx,555,ch.cz)*2) });
+          // cofre con botín en una esquina interior (cabe en cualquiera de los tamaños de casa)
+          if (ihash(ch.cx,8888,ch.cz) < 0.7) d[li(7, info.h+2, 7)] = CHEST;
         }
       }
     }
@@ -1337,7 +1373,7 @@ const MAT_SOUND = {};
   set([STONE, COBBLE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE, BEDROCK, LIGHTSTONE], 150, 2.4);
   set([SAND], 420, 0.7);
   set([SNOW], 520, 0.5);
-  set([LOG, PLANKS], 260, 2.0);
+  set([LOG, PLANKS, CHEST], 260, 2.0);
   set([BRICK], 180, 2.2);
   set([GLASS], 700, 0.5);
 })();
@@ -1841,6 +1877,7 @@ const PLACEABLE_DROP = {
 };
 function finishBreak(h){
   spawnParticles(h.x, h.y, h.z, h.id);
+  if (h.id === CHEST){ openChest(h.x, h.y, h.z); return; } // minarlo también lo abre
   const creative = player.mode === 'creative';
   const tool = activeTool();
   const reqTier = ORE_TIER[h.id] || 0;
@@ -1888,6 +1925,7 @@ function doPlace(){
   const h = raycast(6);
   if (!h) return;
   if (h.id === BED){ trySleep(); return; }
+  if (h.id === CHEST){ openChest(h.x, h.y, h.z); return; }
   const heldId = HOTBAR[sel];
   if (heldId <= 0) return; // las herramientas no se colocan, y un slot vacío tampoco tiene nada
   const x = h.x + h.nx, y = h.y + h.ny, z = h.z + h.nz;
