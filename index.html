@@ -37,7 +37,9 @@
           background:rgba(255,255,255,.07); image-rendering:pixelated;
           background-size:cover; position:relative; }
   .slot.sel { border-color:#fff; box-shadow:0 0 0 2px rgba(0,0,0,.6), inset 0 0 8px rgba(255,255,255,.35); }
-  .slot span { position:absolute; right:2px; bottom:0; font-size:10px; text-shadow:1px 1px 2px #000; opacity:.7; }
+  .slot .key { position:absolute; right:2px; bottom:0; font-size:10px; text-shadow:1px 1px 2px #000; opacity:.7; }
+  .slot .count { position:absolute; left:3px; bottom:1px; font-size:13px; font-weight:800;
+                 text-shadow:1px 1px 0 #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000; }
 
   #name { position:fixed; left:50%; bottom:128px; transform:translateX(-50%);
           font-size:14px; text-shadow:1px 1px 3px #000; opacity:0; transition:opacity .4s;
@@ -272,6 +274,8 @@ const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
       COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20, BED=21;
 
 const HOTBAR = [0,0,0,0,0,0,0,0,0,0]; // supervivencia: empezás sin nada, hay que minar/craftear
+// cuántas unidades hay en cada slot (en creativo no se gasta nunca: Infinity)
+let HOTBAR_COUNT = HOTBAR.map(() => 0);
 // creativo: todos los bloques del juego (menos la roca madre, que es especial/indestructible)
 const HOTBAR_CREATIVE = [GRASS, DIRT, STONE, COBBLE, SAND, GRAVEL, SNOW, LOG, LEAVES, PLANKS,
   GLASS, BRICK, WATER, LAVA, BED, LIGHTSTONE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE];
@@ -1349,8 +1353,8 @@ function craftRecipe(r){
   for(const [k,n] of Object.entries(r.cost)) if ((inv[k]||0) < n) return;
   for(const [k,n] of Object.entries(r.cost)) inv[k] -= n;
   HOTBAR[sel] = r.result;
-  const slot = document.querySelectorAll('.slot')[sel];
-  slot.style.backgroundImage = `url(${itemIcon(r.result)})`;
+  HOTBAR_COUNT[sel] = 1; // las herramientas no se gastan con el uso; los bloques (cama) sí al colocarlos
+  refreshHotbarIcons();
   setSel(sel);
   toast('Crafteado: ' + r.name);
   renderCraftPanel();
@@ -1371,7 +1375,25 @@ const MODE_DESC = {
   survival: 'Empezás sin nada: miná y crafteá. Vida limitada, te podés ahogar y no volás.',
 };
 function refreshHotbarIcons(){
-  document.querySelectorAll('.slot').forEach((s,i) => { s.style.backgroundImage = `url(${itemIcon(HOTBAR[i])})`; });
+  document.querySelectorAll('.slot').forEach((s,i) => {
+    const id = HOTBAR[i], n = HOTBAR_COUNT[i];
+    s.style.backgroundImage = `url(${itemIcon(id)})`;
+    const countEl = s.querySelector('.count');
+    if (countEl) countEl.textContent = (id > 0 && n > 1 && n !== Infinity) ? n : '';
+  });
+}
+// apila una unidad de un bloque en un slot que ya tenga ese mismo bloque; si no hay, usa uno
+// vacío. Devuelve false (e informa "inventario lleno") si no hay dónde ponerlo.
+function grantItem(id, qty){
+  qty = qty || 1;
+  let idx = HOTBAR.findIndex((h,i) => h === id && HOTBAR_COUNT[i] > 0);
+  if (idx < 0) idx = HOTBAR.indexOf(0);
+  if (idx < 0){ toast('Inventario lleno'); return false; }
+  HOTBAR[idx] = id;
+  HOTBAR_COUNT[idx] = (HOTBAR_COUNT[idx]||0) + qty;
+  refreshHotbarIcons();
+  if (idx === sel) setSel(sel);
+  return true;
 }
 function updateModeButtons(){
   document.getElementById('modeCreative').classList.toggle('active', player.mode==='creative');
@@ -1382,15 +1404,17 @@ function setGameMode(mode, silent){
   player.mode = mode;
   if (mode === 'creative'){
     HOTBAR.splice(0, HOTBAR.length, ...HOTBAR_CREATIVE);
+    HOTBAR_COUNT = HOTBAR.map(() => Infinity); // en creativo nunca se gasta
     player.fly = true;
     player.health = player.maxHealth; player.hunger = player.maxHunger; player.air = player.maxAir;
     statusEl.style.display = 'none';
   } else {
     HOTBAR.splice(0, HOTBAR.length, 0,0,0,0,0,0,0,0,0,0);
+    HOTBAR_COUNT = HOTBAR.map(() => 0);
     player.fly = false;
     statusEl.style.display = '';
   }
-  refreshHotbarIcons();
+  rebuildHotbarDOM();
   if (typeof setSel === 'function') setSel(Math.min(sel, HOTBAR.length-1));
   updateModeButtons();
   if (!silent) toast(mode==='creative' ? 'Modo creativo activado' : 'Modo supervivencia activado');
@@ -1502,17 +1526,20 @@ function setRenderDist(r){
   toast('Distancia de dibujado: ' + RENDER_DIST);
 }
 
-// hotbar DOM
-{
+// hotbar DOM: se reconstruye entero cada vez que cambia el largo del hotbar (p. ej. al
+// cambiar de modo, ya que creativo tiene más slots que supervivencia)
+function rebuildHotbarDOM(){
   const bar = document.getElementById('hotbar');
+  bar.innerHTML = '';
   HOTBAR.forEach((id,i) => {
     const d = document.createElement('div');
     d.className = 'slot';
-    d.style.backgroundImage = `url(${itemIcon(id)})`;
-    d.innerHTML = `<span>${i+1}</span>`;
+    d.innerHTML = `<span class="count"></span><span class="key">${i+1}</span>`;
     bar.appendChild(d);
   });
+  refreshHotbarIcons();
 }
+rebuildHotbarDOM();
 
 /* --- colisiones AABB --- */
 function collide(axis, delta){
@@ -1756,17 +1783,7 @@ function finishBreak(h){
     else toast('Necesitás un pico mejor para recoger esto');
   }
   const placeDrop = PLACEABLE_DROP[h.id];
-  if (placeDrop !== undefined && canCollect){
-    const emptyIdx = HOTBAR.indexOf(0);
-    if (emptyIdx >= 0){
-      HOTBAR[emptyIdx] = placeDrop;
-      const slotEl = document.querySelectorAll('.slot')[emptyIdx];
-      if (slotEl) slotEl.style.backgroundImage = `url(${itemIcon(placeDrop)})`;
-      if (emptyIdx === sel) setSel(sel);
-    } else {
-      toast('Inventario lleno');
-    }
-  }
+  if (placeDrop !== undefined && canCollect) grantItem(placeDrop, 1);
   if (h.id === LEAVES && Math.random() < 0.12){
     inv.apple++;
     toast('+1 Manzana');
@@ -1807,6 +1824,12 @@ function doPlace(){
   if (boxBlocksPlayer(x,y,z)) return;
   setBlock(x, y, z, heldId);
   sndPlace(heldId);
+  if (player.mode === 'survival'){
+    HOTBAR_COUNT[sel] = Math.max(0, (HOTBAR_COUNT[sel]||0) - 1);
+    if (HOTBAR_COUNT[sel] <= 0) HOTBAR[sel] = 0;
+    refreshHotbarIcons();
+    setSel(sel); // por si quedó vacío, actualiza la mano
+  }
 }
 
 // dormir: solo de noche, sin monstruos cerca; pasa al amanecer y fija tu punto de reaparición
@@ -1877,6 +1900,7 @@ function save(){
       hp: player.health, hg: player.hunger, ar: player.air,
       inv: { apple:inv.apple, wood:inv.wood, stone:inv.stone, coal:inv.coal, iron:inv.iron, gold:inv.gold, diamond:inv.diamond },
       hotbar: HOTBAR,
+      hotbarCount: player.mode === 'creative' ? null : HOTBAR_COUNT, // Infinity no es JSON válido
       mode: player.mode,
       t: dayTime, fly: player.fly, sel
     }));
@@ -1899,6 +1923,13 @@ function load(){
     inv.iron = si.iron||0; inv.gold = si.gold||0; inv.diamond = si.diamond||0;
     if (Array.isArray(s.hotbar) && s.hotbar.length) HOTBAR.splice(0, HOTBAR.length, ...s.hotbar);
     player.mode = s.mode === 'creative' ? 'creative' : 'survival';
+    if (player.mode === 'creative'){
+      HOTBAR_COUNT = HOTBAR.map(() => Infinity);
+    } else if (Array.isArray(s.hotbarCount) && s.hotbarCount.length === HOTBAR.length){
+      HOTBAR_COUNT = s.hotbarCount.slice();
+    } else {
+      HOTBAR_COUNT = HOTBAR.map(id => id > 0 ? 1 : 0); // compatibilidad con partidas viejas sin contador
+    }
     dayTime = s.t ?? 0.28;
     player.fly = player.mode === 'creative' && !!s.fly;
     sel = s.sel || 0;
@@ -1955,7 +1986,7 @@ if (!loaded){
 // sincroniza la interfaz con el modo actual (cargado o por defecto) sin tocar el hotbar guardado
 statusEl.style.display = player.mode === 'creative' ? 'none' : '';
 updateModeButtons();
-refreshHotbarIcons();
+rebuildHotbarDOM(); // por si la partida cargada trae un hotbar de otro largo (p. ej. creativo)
 setSel(sel);
 hudEl.style.display = 'none';
 addEventListener('beforeunload', save);
