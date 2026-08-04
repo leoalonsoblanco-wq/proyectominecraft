@@ -384,6 +384,25 @@ const edits  = new Map();          // "cx,cz" -> Map(index -> id)
 const dirty  = new Set();
 const ckey = (cx,cz) => cx+','+cz;
 const li = (x,y,z) => y*CXZ + z*CX + x;
+const VILLAGES = [];               // { x,y,z, pop } de cada choza generada
+
+function buildHut(d, cxl, czl, base){
+  const half = 2;
+  const put = (px,py,pz,id) => { if (px<0||px>=CX||pz<0||pz>=CZ||py<0||py>=CY) return; d[li(px,py,pz)] = id; };
+  for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++) put(cxl+dx, base, czl+dz, PLANKS);
+  for(let yy=1; yy<=3; yy++){
+    for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++){
+      if (Math.abs(dx)!==half && Math.abs(dz)!==half) continue;
+      const corner = Math.abs(dx)===half && Math.abs(dz)===half;
+      put(cxl+dx, base+yy, czl+dz, corner ? LOG : PLANKS);
+    }
+  }
+  put(cxl, base+1, czl+half, AIR);
+  put(cxl, base+2, czl+half, AIR);
+  put(cxl-half, base+2, czl, GLASS);
+  put(cxl+half, base+2, czl, GLASS);
+  for(let dz=-half-1; dz<=half+1; dz++) for(let dx=-half-1; dx<=half+1; dx++) put(cxl+dx, base+4, czl+dz, PLANKS);
+}
 
 function generate(ch){
   const d = ch.data, ox = ch.cx*CX, oz = ch.cz*CZ;
@@ -427,6 +446,18 @@ function generate(ch){
       }
     }
     put(tx,top+1,tz,LEAVES,true);
+  }
+  // aldeas: choza ocasional agrupada por región (varias chozas cercanas = una aldea)
+  {
+    const region = fbm2(ch.cx*0.05, ch.cz*0.05, 2, 501);
+    if (region > 0.7 && ihash(ch.cx,4242,ch.cz) < 0.4){
+      const wx = ox+8, wz = oz+8;
+      const info = columnInfo(wx,wz);
+      if (info.surf === GRASS && info.h > SEA+1){
+        buildHut(d, 8, 8, info.h+1);
+        VILLAGES.push({ x: wx+0.5, y: info.h+1, z: oz+10.5, pop: 2+Math.floor(ihash(ch.cx,555,ch.cz)*2) });
+      }
+    }
   }
   // aplicar modificaciones guardadas
   const e = edits.get(ckey(ch.cx,ch.cz));
@@ -1077,6 +1108,8 @@ addEventListener('contextmenu', e => e.preventDefault());
 
 function doBreak(){
   if (player.dead) return;
+  const target = raycastEntity(4.5);
+  if (target){ attackEntity(target); return; }
   const h = raycast(6);
   if (!h || BLOCKS[h.id].unbreakable) return;
   spawnParticles(h.x, h.y, h.z, h.id);
@@ -1388,7 +1421,298 @@ function survivalTick(dt){
 }
 
 /* ============================================================
-   13. BUCLE PRINCIPAL
+   13. ENTIDADES: MOBS Y ALDEAS
+   ============================================================ */
+function boxAt(w,h,d,color,cx,cy,cz){
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshLambertMaterial({ color }));
+  m.position.set(cx,cy,cz);
+  return m;
+}
+function limbBox(w,h,d,color,x,topY,z){
+  const g = new THREE.BoxGeometry(w,h,d);
+  g.translate(0,-h/2,0);
+  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color }));
+  m.position.set(x,topY,z);
+  return m;
+}
+function buildHumanoid(skin, shirt, pants){
+  const g = new THREE.Group();
+  const head = boxAt(0.5,0.5,0.5, skin, 0,1.55,0);
+  const body = boxAt(0.5,0.75,0.28, shirt, 0,1.05,0);
+  const armL = limbBox(0.19,0.7,0.19, shirt, -0.345,1.4,0);
+  const armR = limbBox(0.19,0.7,0.19, shirt,  0.345,1.4,0);
+  const legL = limbBox(0.19,0.75,0.19, pants, -0.13,0.67,0);
+  const legR = limbBox(0.19,0.75,0.19, pants,  0.13,0.67,0);
+  g.add(head, body, armL, armR, legL, legR);
+  g.userData.parts = { armL, armR, legL, legR };
+  return g;
+}
+function buildCreeper(){
+  const g = new THREE.Group();
+  const green=0x3fa63f, dark=0x2c7a2c, black=0x0b0b0b;
+  const head = boxAt(0.5,0.5,0.5, green, 0,1.5,0);
+  const eyeL = boxAt(0.09,0.09,0.02, black, -0.12,1.55,0.255);
+  const eyeR = boxAt(0.09,0.09,0.02, black,  0.12,1.55,0.255);
+  const mouth= boxAt(0.22,0.12,0.02, black, 0,1.38,0.255);
+  const body = boxAt(0.5,0.9,0.32, green, 0,0.95,0);
+  const legFL = limbBox(0.2,0.5,0.2, dark, -0.16,0.5, 0.14);
+  const legFR = limbBox(0.2,0.5,0.2, dark,  0.16,0.5, 0.14);
+  const legBL = limbBox(0.2,0.5,0.2, dark, -0.16,0.5,-0.14);
+  const legBR = limbBox(0.2,0.5,0.2, dark,  0.16,0.5,-0.14);
+  g.add(head,eyeL,eyeR,mouth,body,legFL,legFR,legBL,legBR);
+  g.userData.parts = { legFL,legFR,legBL,legBR };
+  return g;
+}
+function buildQuadruped(bodyColor, headColor, legColor, extra){
+  const g = new THREE.Group();
+  const body = boxAt(0.5,0.5,0.85, bodyColor, 0,0.85,0);
+  const head = boxAt(0.32,0.32,0.32, headColor, 0,0.92,0.5);
+  const legFL = limbBox(0.15,0.5,0.15, legColor, -0.14,0.5, 0.3);
+  const legFR = limbBox(0.15,0.5,0.15, legColor,  0.14,0.5, 0.3);
+  const legBL = limbBox(0.15,0.5,0.15, legColor, -0.14,0.5,-0.3);
+  const legBR = limbBox(0.15,0.5,0.15, legColor,  0.14,0.5,-0.3);
+  g.add(body, head, legFL, legFR, legBL, legBR);
+  if (extra) extra(g);
+  g.userData.parts = { legFL,legFR,legBL,legBR };
+  return g;
+}
+function buildCow(){
+  return buildQuadruped(0xefe6d8, 0xefe6d8, 0xefe6d8, g => {
+    g.add(boxAt(0.51,0.2,0.35, 0x6b4a30, 0,0.95,-0.2));
+    g.add(boxAt(0.51,0.18,0.3, 0x6b4a30, 0,0.78,0.2));
+    g.add(boxAt(0.14,0.14,0.18, 0xd8b6a0, 0,0.9,0.68));
+    g.add(boxAt(0.05,0.12,0.05, 0xdedcd0,  0.13,1.15,0.48));
+    g.add(boxAt(0.05,0.12,0.05, 0xdedcd0, -0.13,1.15,0.48));
+  });
+}
+function buildSheep(){ return buildQuadruped(0xf1f1e8, 0x3a3a3a, 0x3a3a3a); }
+function buildPig(){
+  return buildQuadruped(0xe9a0a0, 0xe9a0a0, 0xe9a0a0, g => {
+    g.add(boxAt(0.16,0.12,0.08, 0xd47f8a, 0,0.86,0.66));
+  });
+}
+
+const MOB_DEFS = {
+  zombie:   { build:()=>buildHumanoid(0x4f9a53,0x1f6f57,0x35406b), hp:20, speed:1.9, hostile:true,  chaseRange:14, attack:2, attackRange:1.15, explodes:false, W:0.28, H:1.9  },
+  creeper:  { build:buildCreeper,                                   hp:20, speed:1.6, hostile:true,  chaseRange:12, attack:0, attackRange:0,    explodes:true,  W:0.3,  H:1.6  },
+  villager: { build:()=>buildHumanoid(0xcaa374,0x7a5a91,0x5a4270), hp:20, speed:1.0, hostile:false, chaseRange:0,  attack:0, attackRange:0,    explodes:false, W:0.28, H:1.9  },
+  cow:      { build:buildCow,   hp:10, speed:1.1, hostile:false, chaseRange:0, attack:0, attackRange:0, explodes:false, W:0.4,  H:1.05 },
+  sheep:    { build:buildSheep, hp:8,  speed:1.1, hostile:false, chaseRange:0, attack:0, attackRange:0, explodes:false, W:0.35, H:1.0  },
+  pig:      { build:buildPig,   hp:8,  speed:1.1, hostile:false, chaseRange:0, attack:0, attackRange:0, explodes:false, W:0.35, H:0.85 },
+};
+
+const ENTITIES = [];
+let dayAmt = 1; // 0 = noche cerrada, 1 = pleno día (se actualiza en el bucle principal)
+
+function spawnMob(type, x, y, z, home){
+  const cfg = MOB_DEFS[type];
+  const mesh = cfg.build();
+  mesh.position.set(x,y,z);
+  scene.add(mesh);
+  const e = {
+    type, cfg, mesh,
+    pos: new THREE.Vector3(x,y,z), vel: new THREE.Vector3(),
+    yaw: Math.random()*Math.PI*2, hp: cfg.hp,
+    onGround:false, dead:false,
+    wanderT:0, wanderAngle:null, walkT:Math.random()*10,
+    attackCd:0, fuse:-1, home: home||null,
+  };
+  ENTITIES.push(e);
+  return e;
+}
+
+function collideEntity(e, axis, delta){
+  e.pos[axis] += delta;
+  const W=e.cfg.W, H=e.cfg.H, eps=1e-3, p=e.pos;
+  const x0=Math.floor(p.x-W), x1=Math.floor(p.x+W);
+  const y0=Math.floor(p.y),   y1=Math.floor(p.y+H);
+  const z0=Math.floor(p.z-W), z1=Math.floor(p.z+W);
+  for(let y=y0;y<=y1;y++) for(let z=z0;z<=z1;z++) for(let x=x0;x<=x1;x++){
+    if (!isSolid(x,y,z)) continue;
+    if (axis==='y'){ if (delta>0) p.y=y-H-eps; else { p.y=y+1+eps; e.onGround=true; } e.vel.y=0; }
+    else if (axis==='x'){ p.x = delta>0 ? x-W-eps : x+1+W+eps; e.vel.x=0; }
+    else { p.z = delta>0 ? z-W-eps : z+1+W+eps; e.vel.z=0; }
+    return;
+  }
+}
+
+function explodeCreeper(e){
+  e.dead = true;
+  scene.remove(e.mesh);
+  sfx(90, 0.5, 0.5, 0.4);
+  spawnParticles(Math.floor(e.pos.x), Math.floor(e.pos.y), Math.floor(e.pos.z), STONE);
+  const dx = player.pos.x-e.pos.x, dz = player.pos.z-e.pos.z, dy = player.pos.y-e.pos.y;
+  const dist = Math.hypot(dx,dz,dy) || 1;
+  if (dist < 4.2 && !player.dead){
+    damagePlayer(Math.max(0, 9*(1 - dist/4.2)), 'una explosión');
+    player.vel.x += (dx/dist)*6; player.vel.z += (dz/dist)*6; player.vel.y += 5;
+  }
+}
+function killEntity(e){
+  if (e.dead) return;
+  e.dead = true;
+  scene.remove(e.mesh);
+  sfx(120, 0.25, 0.3, 0.6);
+}
+function attackEntity(e){
+  e.hp -= 4;
+  sfx(180, 0.12, 0.3, 0.8);
+  const dx = e.pos.x-player.pos.x, dz = e.pos.z-player.pos.z, L = Math.hypot(dx,dz) || 1;
+  e.vel.x += dx/L*3.2; e.vel.z += dz/L*3.2; e.vel.y = 3;
+  if (e.cfg.explodes && e.fuse < 0) e.fuse = 1.4; // golpear a un creeper le hace empezar la mecha
+  if (e.hp <= 0) killEntity(e);
+}
+function raycastEntity(maxDist){
+  const o = new THREE.Vector3(player.pos.x, player.pos.y + player.EYE, player.pos.z);
+  const d = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
+  let best=null, bestT=maxDist;
+  for(const e of ENTITIES){
+    if (e.dead) continue;
+    const cy = e.pos.y + e.cfg.H*0.55;
+    const t = (e.pos.x-o.x)*d.x + (cy-o.y)*d.y + (e.pos.z-o.z)*d.z;
+    if (t < 0 || t > bestT) continue;
+    const cxp=o.x+d.x*t, cyp=o.y+d.y*t, czp=o.z+d.z*t;
+    const dist = Math.hypot(cxp-e.pos.x, cyp-cy, czp-e.pos.z);
+    if (dist < e.cfg.W + 0.35){ best = e; bestT = t; }
+  }
+  return best;
+}
+function animateMob(e, amp){
+  const parts = e.mesh.userData.parts; if (!parts) return;
+  const s = Math.sin(e.walkT*6) * 0.9 * amp;
+  if (parts.legL){ parts.legL.rotation.x = s; parts.legR.rotation.x = -s; }
+  if (parts.armL){ parts.armL.rotation.x = -s; parts.armR.rotation.x = s; }
+  if (parts.legFL){
+    parts.legFL.rotation.x = s;  parts.legBR.rotation.x = s;
+    parts.legFR.rotation.x = -s; parts.legBL.rotation.x = -s;
+  }
+}
+
+let mobSpawnTimer = 0;
+const MAX_HOSTILE = 14, MAX_PASSIVE = 12;
+function countMobs(pred){ let n=0; for(const e of ENTITIES) if (!e.dead && pred(e)) n++; return n; }
+
+function trySpawnMobs(dt){
+  mobSpawnTimer -= dt;
+  if (mobSpawnTimer > 0) return;
+  mobSpawnTimer = 1.5;
+
+  const hostileN = countMobs(e => e.cfg.hostile);
+  const passiveN = countMobs(e => !e.cfg.hostile && e.type !== 'villager');
+  const R = RENDER_DIST*CX;
+
+  for(let tries=0; tries<3; tries++){
+    const ang = Math.random()*Math.PI*2, dist = 14 + Math.random()*Math.max(6, R*0.6);
+    const wx = Math.floor(player.pos.x + Math.cos(ang)*dist);
+    const wz = Math.floor(player.pos.z + Math.sin(ang)*dist);
+    const info = columnInfo(wx,wz);
+    if (info.h <= SEA) continue;
+    const wy = info.h+1;
+    if (getBlock(wx,wy,wz) !== AIR || getBlock(wx,wy+1,wz) !== AIR) continue;
+    if (dayAmt < 0.28 && hostileN < MAX_HOSTILE){
+      spawnMob(Math.random()<0.5 ? 'zombie':'creeper', wx+0.5, wy, wz+0.5);
+    } else if (dayAmt > 0.4 && passiveN < MAX_PASSIVE && info.surf === GRASS){
+      const r = Math.random();
+      spawnMob(r<0.34 ? 'cow' : (r<0.67 ? 'sheep':'pig'), wx+0.5, wy, wz+0.5);
+    }
+  }
+
+  for(const v of VILLAGES){
+    const dx=v.x-player.pos.x, dz=v.z-player.pos.z;
+    if (dx*dx+dz*dz > R*R) continue;
+    const near = countMobs(e => e.type==='villager' && Math.hypot(e.pos.x-v.x, e.pos.z-v.z) < 10);
+    if (near < v.pop){
+      spawnMob('villager', v.x+(Math.random()-0.5)*4, v.y, v.z+(Math.random()-0.5)*4, v);
+    }
+  }
+}
+
+function updateEntities(dt){
+  const px=player.pos.x, py=player.pos.y, pz=player.pos.z;
+  for(const e of ENTITIES){
+    if (e.dead) continue;
+    const cfg = e.cfg;
+    e.attackCd = Math.max(0, e.attackCd - dt);
+
+    const dx = px-e.pos.x, dz = pz-e.pos.z, dy = py-e.pos.y;
+    const dist = Math.hypot(dx,dz);
+
+    if (dist > RENDER_DIST*CX*1.4){ e.dead = true; scene.remove(e.mesh); continue; }
+
+    let moveX=0, moveZ=0, moveSpeed=cfg.speed;
+
+    if (cfg.hostile && !player.dead && dist < cfg.chaseRange && Math.abs(dy) < 8 && dist > 0.01){
+      moveX = dx/dist; moveZ = dz/dist;
+      if (cfg.explodes){
+        if (dist < 3){ if (e.fuse < 0) e.fuse = 1.4; }
+        else if (e.fuse > 0 && dist > 4.5) e.fuse = -1;
+        if (e.fuse >= 0){
+          e.fuse -= dt;
+          const p2 = 1 - Math.max(0, e.fuse/1.4);
+          e.mesh.scale.setScalar(1 + Math.sin(performance.now()*0.025)*0.12*p2);
+          moveX *= 0.15; moveZ *= 0.15;
+          if (e.fuse <= 0){ explodeCreeper(e); continue; }
+        }
+      } else if (dist < cfg.attackRange && e.attackCd <= 0){
+        damagePlayer(cfg.attack, 'un zombie');
+        player.vel.x += (-dx/dist)*3.5; player.vel.z += (-dz/dist)*3.5; player.vel.y = Math.max(player.vel.y, 3.5);
+        e.attackCd = 1.0;
+      }
+    } else {
+      e.wanderT -= dt;
+      if (e.wanderT <= 0){
+        e.wanderT = 1.5 + Math.random()*2.5;
+        e.wanderAngle = Math.random() < 0.25 ? null : Math.random()*Math.PI*2;
+        if (e.home){
+          const hx=e.home.x-e.pos.x, hz=e.home.z-e.pos.z;
+          if (Math.hypot(hx,hz) > 9) e.wanderAngle = Math.atan2(hx,hz);
+        }
+      }
+      if (e.wanderAngle !== null){
+        moveX = Math.sin(e.wanderAngle); moveZ = Math.cos(e.wanderAngle);
+        moveSpeed *= 0.55;
+      }
+    }
+
+    e.vel.x += (moveX*moveSpeed - e.vel.x) * Math.min(1, 8*dt);
+    e.vel.z += (moveZ*moveSpeed - e.vel.z) * Math.min(1, 8*dt);
+
+    const feetBlock = getBlock(Math.floor(e.pos.x), Math.floor(e.pos.y), Math.floor(e.pos.z));
+    if (feetBlock === WATER) e.vel.y += (2 - e.vel.y) * Math.min(1, 6*dt);
+    else e.vel.y = Math.max(e.vel.y - 28*dt, -50);
+
+    if ((moveX || moveZ) && e.onGround){
+      const sx = Math.sign(e.vel.x || moveX), sz = Math.sign(e.vel.z || moveZ);
+      const aheadX = Math.floor(e.pos.x + sx*(cfg.W+0.3)), aheadZ = Math.floor(e.pos.z + sz*(cfg.W+0.3));
+      const footY = Math.floor(e.pos.y+0.05);
+      if (isSolid(aheadX, footY, aheadZ) && !isSolid(aheadX, footY+1, aheadZ) && !isSolid(aheadX, footY+2, aheadZ)){
+        e.vel.y = 7.6;
+      }
+    }
+
+    e.onGround = false;
+    collideEntity(e,'x', e.vel.x*dt);
+    collideEntity(e,'z', e.vel.z*dt);
+    collideEntity(e,'y', e.vel.y*dt);
+
+    const hSpeed = Math.hypot(e.vel.x, e.vel.z);
+    if (hSpeed > 0.15){
+      const targetYaw = Math.atan2(e.vel.x, e.vel.z);
+      let diff = targetYaw - e.yaw;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      e.yaw += diff * Math.min(1, 10*dt);
+    }
+    e.mesh.position.copy(e.pos);
+    e.mesh.rotation.y = e.yaw;
+
+    e.walkT += dt * (1 + Math.min(1.4, hSpeed*1.2));
+    animateMob(e, Math.min(1, hSpeed/1.6));
+  }
+  for(let i=ENTITIES.length-1;i>=0;i--) if (ENTITIES[i].dead) ENTITIES.splice(i,1);
+}
+
+/* ============================================================
+   14. BUCLE PRINCIPAL
    ============================================================ */
 const DAY_LEN = 600;    // segundos por día completo
 const cDayTop=new THREE.Color(0x2f6fce), cDayBot=new THREE.Color(0xa9d3f2);
@@ -1435,8 +1759,9 @@ function frame(now){
   dayTime = (dayTime + dt/DAY_LEN) % 1;
   const ang = dayTime * Math.PI*2;
   const sy = Math.sin(ang), sx2 = Math.cos(ang);
-  const dayAmt = clamp01((sy + 0.16) / 0.40);
+  dayAmt = clamp01((sy + 0.16) / 0.40);
   const duskAmt = Math.exp(-(sy/0.22)*(sy/0.22)) * clamp01(0.5 + sx2);
+  if (active){ trySpawnMobs(dt); updateEntities(dt); }
 
   sun.position.set(sx2*100, sy*100, 40).add(camera.position);
   sun.target.position.copy(camera.position); sun.target.updateMatrixWorld();
@@ -1498,6 +1823,7 @@ function frame(now){
       `Hora ${String(Math.floor(dayTime*24)).padStart(2,'0')}:${String(Math.floor(dayTime*24*60)%60).padStart(2,'0')}   ` +
       `dist ${RENDER_DIST}   ${player.fly ? 'volando' : (player.inWater ? 'en el agua' : (player.onGround ? 'en el suelo' : 'cayendo'))}\n` +
       `Vida ${player.health.toFixed(1)}/${player.maxHealth}   Hambre ${player.hunger.toFixed(1)}/${player.maxHunger}   Aire ${player.air.toFixed(1)}/${player.maxAir}   Manzanas ${inv.apple}\n` +
+      `Entidades ${ENTITIES.length}   Aldeas ${VILLAGES.length}\n` +
       `Semilla ${SEED}`;
   }
 
