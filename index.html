@@ -169,16 +169,21 @@ const BLOCKS = [
   { name:'Nieve',     t:[13,13,13], opaque:true,  layer:0 },
   { name:'Ladrillos', t:[14,14,14], opaque:true,  layer:0 },
   { name:'Grava',     t:[15,15,15], opaque:true,  layer:0 },
+  { name:'Mineral de carbón',   t:[16,16,16], opaque:true, layer:0 },
+  { name:'Mineral de hierro',   t:[17,17,17], opaque:true, layer:0 },
+  { name:'Mineral de oro',      t:[18,18,18], opaque:true, layer:0 },
+  { name:'Mineral de diamante', t:[19,19,19], opaque:true, layer:0 },
 ];
 const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
-      PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14;
+      PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14,
+      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18;
 
 const HOTBAR = [GRASS, STONE, COBBLE, DIRT, SAND, LOG, PLANKS, GLASS, BRICK];
 
 /* ============================================================
    2. ATLAS DE TEXTURAS (dibujado por código, sin archivos)
    ============================================================ */
-const TILE = 32, PAD = 4, CELL = TILE + PAD*2, GRID = 4;
+const TILE = 32, PAD = 4, CELL = TILE + PAD*2, GRID = 5;
 const ATLAS_PX = CELL * GRID;
 const TILEUV = [];          // [u0,v0,u1,v1] por tile
 const BLOCK_COLOR = [];     // color medio de cada bloque (para partículas)
@@ -269,6 +274,22 @@ const TILE_DRAW = [
   (g,rnd,px)=>{ noisyFill(g,rnd,px,132,128,126,0.22);
     for(let i=0;i<34;i++){ g.fillStyle=shade(96,92,90,1+(rnd()-0.5)*0.5);
       g.fillRect(rnd()*TILE|0,rnd()*TILE|0,2+(rnd()*3|0),2+(rnd()*3|0)); } },
+  // 16 mineral de carbón (vetas oscuras sobre piedra)
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,128,128,132,0.16);
+    for(let i=0;i<9;i++){ const cx=rnd()*TILE|0, cy=rnd()*TILE|0;
+      for(let j=0;j<5;j++) px(Math.min(TILE-1,Math.max(0,cx+((rnd()*5|0)-2))), Math.min(TILE-1,Math.max(0,cy+((rnd()*5|0)-2))), shade(18,18,20,1)); } },
+  // 17 mineral de hierro (motas ocres sobre piedra)
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,128,128,132,0.16);
+    for(let i=0;i<8;i++){ const cx=rnd()*TILE|0, cy=rnd()*TILE|0;
+      for(let j=0;j<4;j++) px(Math.min(TILE-1,Math.max(0,cx+((rnd()*5|0)-2))), Math.min(TILE-1,Math.max(0,cy+((rnd()*5|0)-2))), shade(216,178,140,1)); } },
+  // 18 mineral de oro (motas doradas sobre piedra)
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,128,128,132,0.16);
+    for(let i=0;i<8;i++){ const cx=rnd()*TILE|0, cy=rnd()*TILE|0;
+      for(let j=0;j<4;j++) px(Math.min(TILE-1,Math.max(0,cx+((rnd()*5|0)-2))), Math.min(TILE-1,Math.max(0,cy+((rnd()*5|0)-2))), shade(238,206,64,1)); } },
+  // 19 mineral de diamante (motas cian sobre piedra)
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,128,128,132,0.16);
+    for(let i=0;i<7;i++){ const cx=rnd()*TILE|0, cy=rnd()*TILE|0;
+      for(let j=0;j<4;j++) px(Math.min(TILE-1,Math.max(0,cx+((rnd()*5|0)-2))), Math.min(TILE-1,Math.max(0,cy+((rnd()*5|0)-2))), shade(96,224,224,1)); } },
 ];
 
 function buildAtlas(){
@@ -364,21 +385,97 @@ function ihash(x,y,z){
 const smooth = t => t*t*(3-2*t);
 const lerp = (a,b,t) => a + (b-a)*t;
 
+/* --- ruido Simplex 2D/3D (algoritmo clásico de Perlin/Gustavson, dominio público) ---
+   se usa para el relieve, temperatura/humedad (biomas) y densidad de cuevas: da un
+   terreno con curvas más naturales y menos "cuadriculadas" que el ruido de valor previo */
+function buildSimplex(seed){
+  const rnd = mulberry(seed);
+  const p = new Uint8Array(256);
+  for(let i=0;i<256;i++) p[i]=i;
+  for(let i=255;i>0;i--){ const j=(rnd()*(i+1))|0; const tmp=p[i]; p[i]=p[j]; p[j]=tmp; }
+  const perm = new Uint8Array(512), permMod12 = new Uint8Array(512);
+  for(let i=0;i<512;i++){ perm[i]=p[i&255]; permMod12[i]=perm[i]%12; }
+  return { perm, permMod12 };
+}
+let SIMPLEX = buildSimplex(1337);
+function reseedSimplex(seed){ SIMPLEX = buildSimplex(seed); }
+
+const GRAD3 = [
+  [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],
+  [1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+  [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1],
+];
+const SIMPLEX_F2 = 0.5*(Math.sqrt(3)-1), SIMPLEX_G2 = (3-Math.sqrt(3))/6;
+function simplex2Raw(xin, yin){
+  const { perm, permMod12 } = SIMPLEX;
+  const s = (xin+yin)*SIMPLEX_F2;
+  const i = Math.floor(xin+s), j = Math.floor(yin+s);
+  const t = (i+j)*SIMPLEX_G2;
+  const X0 = i-t, Y0 = j-t;
+  const x0 = xin-X0, y0 = yin-Y0;
+  let i1,j1;
+  if (x0>y0){ i1=1; j1=0; } else { i1=0; j1=1; }
+  const x1=x0-i1+SIMPLEX_G2, y1=y0-j1+SIMPLEX_G2;
+  const x2=x0-1+2*SIMPLEX_G2, y2=y0-1+2*SIMPLEX_G2;
+  const ii=i&255, jj=j&255;
+  const gi0 = permMod12[ii+perm[jj]];
+  const gi1 = permMod12[ii+i1+perm[jj+j1]];
+  const gi2 = permMod12[ii+1+perm[jj+1]];
+  let n0=0,n1=0,n2=0;
+  let t0 = 0.5 - x0*x0-y0*y0;
+  if (t0>=0){ t0*=t0; n0 = t0*t0*(GRAD3[gi0][0]*x0+GRAD3[gi0][1]*y0); }
+  let t1 = 0.5 - x1*x1-y1*y1;
+  if (t1>=0){ t1*=t1; n1 = t1*t1*(GRAD3[gi1][0]*x1+GRAD3[gi1][1]*y1); }
+  let t2 = 0.5 - x2*x2-y2*y2;
+  if (t2>=0){ t2*=t2; n2 = t2*t2*(GRAD3[gi2][0]*x2+GRAD3[gi2][1]*y2); }
+  return 70*(n0+n1+n2);
+}
+const SIMPLEX_F3 = 1/3, SIMPLEX_G3 = 1/6;
+function simplex3Raw(xin, yin, zin){
+  const { perm, permMod12 } = SIMPLEX;
+  const s = (xin+yin+zin)*SIMPLEX_F3;
+  const i = Math.floor(xin+s), j = Math.floor(yin+s), k = Math.floor(zin+s);
+  const t = (i+j+k)*SIMPLEX_G3;
+  const X0=i-t, Y0=j-t, Z0=k-t;
+  const x0=xin-X0, y0=yin-Y0, z0=zin-Z0;
+  let i1,j1,k1, i2,j2,k2;
+  if (x0>=y0){
+    if (y0>=z0){ i1=1;j1=0;k1=0; i2=1;j2=1;k2=0; }
+    else if (x0>=z0){ i1=1;j1=0;k1=0; i2=1;j2=0;k2=1; }
+    else { i1=0;j1=0;k1=1; i2=1;j2=0;k2=1; }
+  } else {
+    if (y0<z0){ i1=0;j1=0;k1=1; i2=0;j2=1;k2=1; }
+    else if (x0<z0){ i1=0;j1=1;k1=0; i2=0;j2=1;k2=1; }
+    else { i1=0;j1=1;k1=0; i2=1;j2=1;k2=0; }
+  }
+  const x1=x0-i1+SIMPLEX_G3, y1=y0-j1+SIMPLEX_G3, z1=z0-k1+SIMPLEX_G3;
+  const x2=x0-i2+2*SIMPLEX_G3, y2=y0-j2+2*SIMPLEX_G3, z2=z0-k2+2*SIMPLEX_G3;
+  const x3=x0-1+3*SIMPLEX_G3, y3=y0-1+3*SIMPLEX_G3, z3=z0-1+3*SIMPLEX_G3;
+  const ii=i&255, jj=j&255, kk=k&255;
+  const gi0 = permMod12[ii+perm[jj+perm[kk]]];
+  const gi1 = permMod12[ii+i1+perm[jj+j1+perm[kk+k1]]];
+  const gi2 = permMod12[ii+i2+perm[jj+j2+perm[kk+k2]]];
+  const gi3 = permMod12[ii+1+perm[jj+1+perm[kk+1]]];
+  let n0=0,n1=0,n2=0,n3=0;
+  let t0=0.6-x0*x0-y0*y0-z0*z0;
+  if (t0>=0){ t0*=t0; n0=t0*t0*(GRAD3[gi0][0]*x0+GRAD3[gi0][1]*y0+GRAD3[gi0][2]*z0); }
+  let t1=0.6-x1*x1-y1*y1-z1*z1;
+  if (t1>=0){ t1*=t1; n1=t1*t1*(GRAD3[gi1][0]*x1+GRAD3[gi1][1]*y1+GRAD3[gi1][2]*z1); }
+  let t2=0.6-x2*x2-y2*y2-z2*z2;
+  if (t2>=0){ t2*=t2; n2=t2*t2*(GRAD3[gi2][0]*x2+GRAD3[gi2][1]*y2+GRAD3[gi2][2]*z2); }
+  let t3=0.6-x3*x3-y3*y3-z3*z3;
+  if (t3>=0){ t3*=t3; n3=t3*t3*(GRAD3[gi3][0]*x3+GRAD3[gi3][1]*y3+GRAD3[gi3][2]*z3); }
+  return 32*(n0+n1+n2+n3);
+}
+// mismas firmas que antes (x,z,s) / (x,y,z,s) devolviendo 0..1, para no tocar el resto
+// del generador: "s" desplaza el dominio y da campos independientes entre sí.
 function noise2(x,z,s){
-  const xi=Math.floor(x), zi=Math.floor(z);
-  const xf=smooth(x-xi), zf=smooth(z-zi);
-  const a=ihash(xi,s,zi), b=ihash(xi+1,s,zi), c=ihash(xi,s,zi+1), d=ihash(xi+1,s,zi+1);
-  return lerp(lerp(a,b,xf), lerp(c,d,xf), zf);
+  const off = s*10007.531;
+  return simplex2Raw(x+off, z+off*1.37)*0.5+0.5;
 }
 function noise3(x,y,z,s){
-  const xi=Math.floor(x), yi=Math.floor(y), zi=Math.floor(z);
-  const xf=smooth(x-xi), yf=smooth(y-yi), zf=smooth(z-zi);
-  const n=(X,Y,Z)=>ihash(X*131+s, Y, Z);
-  const c00=lerp(n(xi,yi,zi),   n(xi+1,yi,zi),   xf);
-  const c10=lerp(n(xi,yi+1,zi), n(xi+1,yi+1,zi), xf);
-  const c01=lerp(n(xi,yi,zi+1), n(xi+1,yi,zi+1), xf);
-  const c11=lerp(n(xi,yi+1,zi+1),n(xi+1,yi+1,zi+1),xf);
-  return lerp(lerp(c00,c10,yf), lerp(c01,c11,yf), zf);
+  const off = s*10007.531;
+  return simplex3Raw(x+off, y+off*1.37, z+off*0.71)*0.5+0.5;
 }
 function fbm2(x,z,oct,s){
   let v=0, a=0.5, f=1, norm=0;
@@ -395,23 +492,37 @@ function heightAt(wx,wz){
   return Math.max(2, Math.min(CY-10, Math.round(h)));
 }
 function tempAt(wx,wz){ return fbm2(wx*0.0009, wz*0.0009, 2, 211); }
+function moistureAt(wx,wz){ return fbm2(wx*0.0012, wz*0.0012, 2, 617); }
 
+const BIOME_PLAINS=0, BIOME_FOREST=1, BIOME_DESERT=2, BIOME_SNOW=3;
+function biomeAt(h,t,m){
+  if (t < 0.32 || h > 52) return BIOME_SNOW;
+  if (t > 0.62 && h < 46) return BIOME_DESERT;
+  if (m > 0.55) return BIOME_FOREST;
+  return BIOME_PLAINS;
+}
 function columnInfo(wx,wz){
-  const h = heightAt(wx,wz), t = tempAt(wx,wz);
+  const h = heightAt(wx,wz), t = tempAt(wx,wz), m = moistureAt(wx,wz);
+  const biome = biomeAt(h,t,m);
   let surf = GRASS, sub = DIRT;
-  if (t > 0.615 && h < 46)      { surf = SAND;  sub = SAND;  }
-  else if (t < 0.335 || h > 52) { surf = SNOW;  sub = DIRT;  }
-  if (h <= SEA+1)               { surf = SAND;  sub = SAND;  }
-  return { h, surf, sub, t };
+  if (biome === BIOME_DESERT)     { surf = SAND; sub = SAND; }
+  else if (biome === BIOME_SNOW)  { surf = SNOW; sub = DIRT; }
+  if (h <= SEA+1)                 { surf = SAND; sub = SAND; }   // playas en cualquier bioma
+  return { h, surf, sub, t, biome };
 }
 function isTree(wx,wz){
   const r = ihash(wx, 7771, wz);
-  if (r > 0.063) return 0;                            // descarte barato primero
-  const dens = fbm2(wx*0.008, wz*0.008, 2, 307);      // bosques agrupados
-  if (r > 0.018 + dens*0.045) return 0;
+  if (r > 0.14) return 0;                             // descarte barato (techo = caso más denso, bosque)
   const info = columnInfo(wx,wz);
   if (info.surf !== GRASS || info.h <= SEA+1) return 0;
-  return 4 + Math.floor(ihash(wx, 991, wz)*3);        // altura del tronco
+  const dens = fbm2(wx*0.008, wz*0.008, 2, 307);       // agrupa los árboles en manchas de bosque
+  let chance;
+  if (info.biome === BIOME_FOREST)      chance = 0.02  + dens*0.12;   // bosque: denso
+  else if (info.biome === BIOME_SNOW)   chance = 0.006 + dens*0.02;   // taiga: disperso
+  else if (info.biome === BIOME_PLAINS) chance = 0.004 + dens*0.014;  // pradera: muy disperso
+  else chance = 0;                                     // desierto: sin árboles
+  if (r > chance) return 0;
+  return 4 + Math.floor(ihash(wx, 991, wz)*3);         // altura del tronco
 }
 
 /* ============================================================
@@ -443,6 +554,64 @@ function buildHut(d, cxl, czl, base){
   for(let dz=-half-1; dz<=half+1; dz++) for(let dx=-half-1; dx<=half+1; dx++) put(cxl+dx, base+4, czl+dz, PLANKS);
 }
 
+// piedra o mineral según profundidad (de más rara/profunda a más común, como en Minecraft)
+function oreOrStone(wx,y,wz,h){
+  if (y<=12  && ihash(wx,y*5+1,wz) < 0.0012) return DIAMOND_ORE;
+  if (y<=22  && ihash(wx,y*5+2,wz) < 0.0035) return GOLD_ORE;
+  if (y<=44  && ihash(wx,y*5+3,wz) < 0.008)  return IRON_ORE;
+  if (y<h-4  && ihash(wx,y*5+4,wz) < 0.014)  return COAL_ORE;
+  if (ihash(wx,y*3,wz) < 0.02) return GRAVEL;
+  return STONE;
+}
+
+/* --- cuevas 3D tipo "gusano": rejilla de sistemas deterministas, cada uno es un
+   camino aleatorio (seguido de semilla) que se talla como una serie de esferas
+   solapadas a lo largo del recorrido, con radio afinado en las puntas --- */
+const CAVE_CELL = 48, CAVE_STEPS = 46, CAVE_STEP_LEN = 3.2;
+function caveWormExists(gx,gz){ return ihash(gx, 9001, gz) < 0.55; }
+function caveWormPath(gx,gz){
+  let x = gx*CAVE_CELL + 8 + ihash(gx,1,gz)*(CAVE_CELL-16);
+  let z = gz*CAVE_CELL + 8 + ihash(gx,2,gz)*(CAVE_CELL-16);
+  let y = 6 + ihash(gx,3,gz)*22;
+  let yaw = ihash(gx,4,gz)*Math.PI*2;
+  let pitch = (ihash(gx,5,gz)-0.5)*0.6;
+  const pts = [];
+  for(let i=0;i<CAVE_STEPS;i++){
+    yaw   += (ihash(gx*1000+i,6,gz*1000+i)-0.5)*1.1;
+    pitch += (ihash(gx*1000+i,7,gz*1000+i)-0.5)*0.35;
+    pitch = Math.max(-0.8, Math.min(0.8, pitch));
+    x += Math.cos(yaw)*Math.cos(pitch)*CAVE_STEP_LEN;
+    z += Math.sin(yaw)*Math.cos(pitch)*CAVE_STEP_LEN;
+    y += Math.sin(pitch)*CAVE_STEP_LEN;
+    y = Math.max(3, Math.min(SEA-4, y));
+    const taper = Math.min(1, i/6) * Math.min(1, (CAVE_STEPS-1-i)/6);
+    const radius = (1.5 + ihash(gx*1000+i,8,gz*1000+i)*1.7) * Math.max(0.35, taper);
+    pts.push({ x, y, z, radius });
+  }
+  return pts;
+}
+function carveCaves(d, ox, oz){
+  const gx0 = Math.floor(ox/CAVE_CELL)-2, gx1 = Math.floor((ox+CX)/CAVE_CELL)+2;
+  const gz0 = Math.floor(oz/CAVE_CELL)-2, gz1 = Math.floor((oz+CZ)/CAVE_CELL)+2;
+  for(let gz=gz0; gz<=gz1; gz++) for(let gx=gx0; gx<=gx1; gx++){
+    if (!caveWormExists(gx,gz)) continue;
+    for(const p of caveWormPath(gx,gz)){
+      const lx0 = Math.max(0, Math.floor(p.x-p.radius-1-ox)), lx1 = Math.min(CX-1, Math.ceil(p.x+p.radius+1-ox));
+      const lz0 = Math.max(0, Math.floor(p.z-p.radius-1-oz)), lz1 = Math.min(CZ-1, Math.ceil(p.z+p.radius+1-oz));
+      if (lx0>lx1 || lz0>lz1) continue;
+      const ly0 = Math.max(1, Math.floor(p.y-p.radius-1)), ly1 = Math.min(CY-2, Math.ceil(p.y+p.radius+1));
+      const r2 = p.radius*p.radius;
+      for(let ly=ly0; ly<=ly1; ly++) for(let lz=lz0; lz<=lz1; lz++) for(let lx=lx0; lx<=lx1; lx++){
+        const dx=(ox+lx)-p.x, dy=ly-p.y, dz=(oz+lz)-p.z;
+        if (dx*dx + dy*dy*1.5 + dz*dz < r2){
+          const i = li(lx,ly,lz);
+          if (d[i] !== BEDROCK) d[i] = AIR;
+        }
+      }
+    }
+  }
+}
+
 function generate(ch){
   const d = ch.data, ox = ch.cx*CX, oz = ch.cz*CZ;
   for(let z=0;z<CZ;z++) for(let x=0;x<CX;x++){
@@ -451,19 +620,21 @@ function generate(ch){
     for(let y=0;y<=Math.max(h,SEA);y++){
       let b = AIR;
       if (y===0 || (y===1 && ihash(wx,y,wz)<0.7)) b = BEDROCK;
-      else if (y < h-4) b = (ihash(wx,y*3,wz) < 0.02) ? GRAVEL : STONE;
+      else if (y < h-4) b = oreOrStone(wx,y,wz,h);
       else if (y < h)   b = sub;
       else if (y === h) b = surf;
       else if (y <= SEA) b = WATER;
       if (b) d[li(x,y,z)] = b;
     }
-    // cuevas: intersección de dos ruidos => túneles
+    // cuevas pequeñas: intersección de dos ruidos => bolsas/grietas irregulares
     for(let y=2;y<h-2;y++){
       const a = noise3(wx*0.024, y*0.04, wz*0.024, 3) - 0.5;
       const b = noise3(wx*0.024, y*0.04, wz*0.024, 61) - 0.5;
       if (a*a + b*b < 0.0021) d[li(x,y,z)] = AIR;
     }
   }
+  // cuevas grandes: túneles tipo "gusano" (ver carveCaves)
+  carveCaves(d, ox, oz);
   // árboles (se recorren columnas vecinas para que crucen los bordes del chunk)
   for(let tz=-3; tz<CZ+3; tz++) for(let tx=-3; tx<CX+3; tx++){
     const wx=ox+tx, wz=oz+tz;
@@ -1212,6 +1383,7 @@ function pickSpawnVillageChunk(maxR){
 }
 
 const loaded = load();
+reseedSimplex(SEED);
 document.getElementById('seedTxt').textContent = 'semilla ' + SEED;
 if (!loaded){
   const vc = pickSpawnVillageChunk(24);
