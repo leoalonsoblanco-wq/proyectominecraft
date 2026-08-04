@@ -122,21 +122,37 @@
   #craftPanel { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
                 background:rgba(6,10,18,.82); backdrop-filter:blur(3px); z-index:12; }
   #craftPanel.hide { display:none; }
-  #craftBox { width:420px; max-width:90vw; padding:22px 26px; background:rgba(20,24,34,.6);
-              border:1px solid rgba(255,255,255,.15); border-radius:8px; }
-  #craftBox h2 { letter-spacing:3px; margin-bottom:4px; font-size:20px; }
-  #craftBox .sub { opacity:.6; font-size:12px; margin-bottom:14px; }
-  #craftMats { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; opacity:.85;
-               margin-bottom:16px; padding-bottom:12px; border-bottom:1px solid rgba(255,255,255,.12); }
+  #craftBox { width:600px; max-width:94vw; max-height:92vh; overflow-y:auto;
+              padding:20px 24px; background:linear-gradient(180deg,#8a8a8a,#6d6d6d);
+              border:4px solid #3c3c3c; border-radius:6px; box-shadow:0 20px 60px rgba(0,0,0,.6);
+              color:#1c1c1c; }
+  #craftBox h2 { letter-spacing:2px; margin-bottom:2px; font-size:18px; color:#242424; }
+  #craftBox .sub { opacity:.65; font-size:11px; margin-bottom:10px; color:#222; }
+  #craftTop { display:flex; gap:16px; margin-bottom:14px; }
+  #craftListWrap { flex:1; background:rgba(0,0,0,.12); border-radius:5px; padding:10px 12px;
+                   max-height:220px; overflow-y:auto; }
+  #craftMats { display:flex; flex-wrap:wrap; gap:6px 12px; font-size:11px; opacity:.85;
+               margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid rgba(0,0,0,.15); }
   .recipe { display:flex; align-items:center; justify-content:space-between; gap:10px;
-            padding:8px 0; border-bottom:1px solid rgba(255,255,255,.08); }
+            padding:6px 0; border-bottom:1px solid rgba(0,0,0,.1); }
   .recipe:last-child { border-bottom:none; }
-  .recipe .info { font-size:13px; }
-  .recipe .cost { opacity:.6; font-size:11px; margin-top:2px; }
-  .recipe button { font-size:12px; padding:7px 14px; border:none; border-radius:5px; cursor:pointer;
+  .recipe .info { font-size:12px; }
+  .recipe .cost { opacity:.65; font-size:10px; margin-top:2px; }
+  .recipe button { font-size:11px; padding:6px 12px; border:none; border-radius:4px; cursor:pointer;
                    background:#4a7d9d; color:#fff; border-bottom:3px solid #2f5a6b; letter-spacing:.5px; }
   .recipe button:hover:not(:disabled) { background:#5a95b8; }
-  .recipe button:disabled { background:#3a3f4a; border-bottom-color:#22252c; opacity:.5; cursor:not-allowed; }
+  .recipe button:disabled { background:#5a5a5a; border-bottom-color:#3a3a3a; opacity:.5; cursor:not-allowed; }
+
+  /* grilla de inventario estilo Minecraft: casillas grises hundidas */
+  .invRow { display:grid; grid-template-columns:repeat(9, 1fr); gap:3px; margin:0 auto 6px; max-width:432px; }
+  .invSlot { aspect-ratio:1; border:2px solid; border-color:#373737 #dcdcdc #dcdcdc #373737;
+             background:#8b8b8b; image-rendering:pixelated; background-size:cover; position:relative;
+             cursor:pointer; }
+  .invSlot:hover { background-color:#a3a3a3; }
+  .invSlot.sel { outline:2px solid #fff; outline-offset:-2px; }
+  .invSlot .count { position:absolute; left:2px; bottom:0; font-size:12px; font-weight:800; color:#fff;
+                     text-shadow:1px 1px 0 #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000; }
+  #invHotbarMirror { margin-top:8px; padding-top:10px; border-top:2px solid rgba(0,0,0,.25); }
   #craftClose { margin-top:6px; font-size:11px; opacity:.5; background:none; border:none;
                 color:#fff; cursor:pointer; text-decoration:underline; }
   #craftClose:hover { opacity:.85; }
@@ -199,11 +215,21 @@
 
 <div id="craftPanel" class="hide">
   <div id="craftBox">
-    <h2>CRAFTEO</h2>
-    <div class="sub">el resultado se coloca en tu slot de hotbar seleccionado</div>
-    <div id="craftMats"></div>
-    <div id="craftList"></div>
-    <button id="craftClose">cerrar (C)</button>
+    <div id="craftTop">
+      <div id="craftListWrap">
+        <h2>CRAFTEO</h2>
+        <div class="sub">el resultado va a tu slot de hotbar seleccionado (el que tiene el borde blanco)</div>
+        <div id="craftMats"></div>
+        <div id="craftList"></div>
+      </div>
+    </div>
+    <div class="sub" style="margin-bottom:6px;">INVENTARIO — clic en una casilla para intercambiarla con tu slot seleccionado</div>
+    <div id="invGrid"></div>
+    <div id="invHotbarMirror">
+      <div class="sub" style="margin-bottom:6px;">hotbar</div>
+      <div id="invHotbarRow" class="invRow"></div>
+    </div>
+    <button id="craftClose" class="menuBtn secondary" style="margin:14px auto 0;">cerrar (C)</button>
   </div>
 </div>
 
@@ -1426,6 +1452,7 @@ function openCraft(){
   if (player.dead) return;
   craftOpen = true;
   renderCraftPanel();
+  refreshInventoryPanelUI();
   craftPanelEl.classList.remove('hide');
   document.exitPointerLock();
 }
@@ -1477,25 +1504,91 @@ const MODE_DESC = {
   survival: 'Empezás sin nada: miná y crafteá. Vida limitada, te podés ahogar y no volás.',
 };
 function refreshHotbarIcons(){
-  document.querySelectorAll('.slot').forEach((s,i) => {
+  document.querySelectorAll('#hotbar .slot').forEach((s,i) => {
     const id = HOTBAR[i], n = HOTBAR_COUNT[i];
     s.style.backgroundImage = `url(${itemIcon(id)})`;
     const countEl = s.querySelector('.count');
     if (countEl) countEl.textContent = (id > 0 && n > 1 && n !== Infinity) ? n : '';
   });
+  refreshInventoryPanelUI();
 }
-// apila una unidad de un bloque en un slot que ya tenga ese mismo bloque; si no hay, usa uno
-// vacío. Devuelve false (e informa "inventario lleno") si no hay dónde ponerlo.
+
+/* --- inventario extendido: 27 slots más además del hotbar, estilo Minecraft --- */
+const INV_SIZE = 27;
+let INVENTORY = new Array(INV_SIZE).fill(0);
+let INVENTORY_COUNT = new Array(INV_SIZE).fill(0);
+const invGridEl = document.getElementById('invGrid');
+const invHotbarRowEl = document.getElementById('invHotbarRow');
+
+function buildInventoryDOM(){
+  invGridEl.innerHTML = '';
+  for(let i=0; i<INV_SIZE; i++){
+    const d = document.createElement('div');
+    d.className = 'invSlot';
+    d.innerHTML = `<span class="count"></span>`;
+    d.onclick = () => swapWithSelected(i);
+    invGridEl.appendChild(d);
+  }
+}
+function buildInvHotbarMirrorDOM(){
+  if (!invHotbarRowEl) return;
+  invHotbarRowEl.innerHTML = '';
+  HOTBAR.forEach((id,i) => {
+    const d = document.createElement('div');
+    d.className = 'invSlot';
+    d.innerHTML = `<span class="count"></span>`;
+    d.onclick = () => setSel(i);
+    invHotbarRowEl.appendChild(d);
+  });
+}
+function refreshInventoryPanelUI(){
+  document.querySelectorAll('#invGrid .invSlot').forEach((s,i) => {
+    const id = INVENTORY[i], n = INVENTORY_COUNT[i];
+    s.style.backgroundImage = `url(${itemIcon(id)})`;
+    const c = s.querySelector('.count');
+    if (c) c.textContent = (id > 0 && n > 1) ? n : '';
+  });
+  document.querySelectorAll('#invHotbarRow .invSlot').forEach((s,i) => {
+    const id = HOTBAR[i], n = HOTBAR_COUNT[i];
+    s.style.backgroundImage = `url(${itemIcon(id)})`;
+    s.classList.toggle('sel', i === sel);
+    const c = s.querySelector('.count');
+    if (c) c.textContent = (id > 0 && n > 1 && n !== Infinity) ? n : '';
+  });
+}
+// intercambia el contenido de un slot del inventario extendido con el slot de hotbar seleccionado
+function swapWithSelected(i){
+  const tId = HOTBAR[sel], tN = HOTBAR_COUNT[sel];
+  HOTBAR[sel] = INVENTORY[i]; HOTBAR_COUNT[sel] = INVENTORY_COUNT[i];
+  INVENTORY[i] = tId; INVENTORY_COUNT[i] = tN;
+  refreshHotbarIcons();
+  setSel(sel);
+}
+// apila una unidad de un bloque en un slot que ya tenga ese mismo bloque (primero en el hotbar,
+// después en el inventario extendido); si no hay, usa el primer slot vacío disponible.
+// Devuelve false (e informa "inventario lleno") si no hay dónde ponerlo.
 function grantItem(id, qty){
   qty = qty || 1;
   let idx = HOTBAR.findIndex((h,i) => h === id && HOTBAR_COUNT[i] > 0);
-  if (idx < 0) idx = HOTBAR.indexOf(0);
-  if (idx < 0){ toast('Inventario lleno'); return false; }
-  HOTBAR[idx] = id;
-  HOTBAR_COUNT[idx] = (HOTBAR_COUNT[idx]||0) + qty;
-  refreshHotbarIcons();
-  if (idx === sel) setSel(sel);
-  return true;
+  if (idx >= 0){
+    HOTBAR_COUNT[idx] += qty;
+    refreshHotbarIcons();
+    if (idx === sel) setSel(sel);
+    return true;
+  }
+  idx = INVENTORY.findIndex((h,i) => h === id && INVENTORY_COUNT[i] > 0);
+  if (idx >= 0){ INVENTORY_COUNT[idx] += qty; refreshInventoryPanelUI(); return true; }
+  idx = HOTBAR.indexOf(0);
+  if (idx >= 0){
+    HOTBAR[idx] = id; HOTBAR_COUNT[idx] = qty;
+    refreshHotbarIcons();
+    if (idx === sel) setSel(sel);
+    return true;
+  }
+  idx = INVENTORY.indexOf(0);
+  if (idx >= 0){ INVENTORY[idx] = id; INVENTORY_COUNT[idx] = qty; refreshInventoryPanelUI(); return true; }
+  toast('Inventario lleno');
+  return false;
 }
 function updateModeButtons(){
   document.getElementById('modeCreative').classList.toggle('active', player.mode==='creative');
@@ -1619,6 +1712,7 @@ function setSel(i){
     hand.geometry = cubeGeometry(id);
     toast(BLOCKS[id].name);
   }
+  refreshInventoryPanelUI(); // por si el panel está abierto, refleja la nueva selección ahí también
 }
 function setRenderDist(r){
   RENDER_DIST = Math.max(3, Math.min(14, r));
@@ -1639,8 +1733,10 @@ function rebuildHotbarDOM(){
     d.innerHTML = `<span class="count"></span><span class="key">${i+1}</span>`;
     bar.appendChild(d);
   });
+  buildInvHotbarMirrorDOM();
   refreshHotbarIcons();
 }
+buildInventoryDOM();
 rebuildHotbarDOM();
 
 /* --- colisiones AABB --- */
@@ -2012,6 +2108,8 @@ function save(){
              beef:inv.beef, pork:inv.pork, rotten:inv.rotten, gunpowder:inv.gunpowder },
       hotbar: HOTBAR,
       hotbarCount: player.mode === 'creative' ? null : HOTBAR_COUNT, // Infinity no es JSON válido
+      inventory: INVENTORY,
+      inventoryCount: INVENTORY_COUNT,
       mode: player.mode,
       t: dayTime, fly: player.fly, sel
     }));
@@ -2041,6 +2139,11 @@ function load(){
       HOTBAR_COUNT = s.hotbarCount.slice();
     } else {
       HOTBAR_COUNT = HOTBAR.map(id => id > 0 ? 1 : 0); // compatibilidad con partidas viejas sin contador
+    }
+    if (Array.isArray(s.inventory) && s.inventory.length === INV_SIZE){
+      INVENTORY = s.inventory.slice();
+      INVENTORY_COUNT = (Array.isArray(s.inventoryCount) && s.inventoryCount.length === INV_SIZE)
+        ? s.inventoryCount.slice() : INVENTORY.map(id => id > 0 ? 1 : 0);
     }
     dayTime = s.t ?? 0.28;
     player.fly = player.mode === 'creative' && !!s.fly;
