@@ -722,22 +722,74 @@ const li = (x,y,z) => y*CXZ + z*CX + x;
 const VILLAGES = [];               // { x,y,z, pop } de cada choza generada
 const FORCE_VILLAGE = new Set();   // ckeys que deben tener choza sí o sí (garantiza aldea de inicio)
 
-function buildHut(d, cxl, czl, base){
-  const half = 2;
+/* --- edificios de aldea: variedad de tamaños/estructuras, más pozo, granja y herrería --- */
+function buildWalledHouse(d, cxl, czl, base, halfX, halfZ, height, wallMat, cornerMat, windowMat){
   const put = (px,py,pz,id) => { if (px<0||px>=CX||pz<0||pz>=CZ||py<0||py>=CY) return; d[li(px,py,pz)] = id; };
-  for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++) put(cxl+dx, base, czl+dz, PLANKS);
-  for(let yy=1; yy<=3; yy++){
-    for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++){
-      if (Math.abs(dx)!==half && Math.abs(dz)!==half) continue;
-      const corner = Math.abs(dx)===half && Math.abs(dz)===half;
-      put(cxl+dx, base+yy, czl+dz, corner ? LOG : PLANKS);
+  for(let dz=-halfZ; dz<=halfZ; dz++) for(let dx=-halfX; dx<=halfX; dx++) put(cxl+dx, base, czl+dz, PLANKS);
+  for(let yy=1; yy<=height; yy++){
+    for(let dz=-halfZ; dz<=halfZ; dz++) for(let dx=-halfX; dx<=halfX; dx++){
+      if (Math.abs(dx)!==halfX && Math.abs(dz)!==halfZ) continue;
+      const corner = Math.abs(dx)===halfX && Math.abs(dz)===halfZ;
+      put(cxl+dx, base+yy, czl+dz, corner ? cornerMat : wallMat);
     }
   }
-  put(cxl, base+1, czl+half, AIR);
-  put(cxl, base+2, czl+half, AIR);
-  put(cxl-half, base+2, czl, GLASS);
-  put(cxl+half, base+2, czl, GLASS);
-  for(let dz=-half-1; dz<=half+1; dz++) for(let dx=-half-1; dx<=half+1; dx++) put(cxl+dx, base+4, czl+dz, PLANKS);
+  put(cxl, base+1, czl+halfZ, AIR);
+  put(cxl, base+2, czl+halfZ, AIR);
+  put(cxl-halfX, base+2, czl, windowMat);
+  put(cxl+halfX, base+2, czl, windowMat);
+  if (halfZ >= 3) put(cxl, base+2, czl-halfZ, windowMat);
+  for(let dz=-halfZ-1; dz<=halfZ+1; dz++) for(let dx=-halfX-1; dx<=halfX+1; dx++) put(cxl+dx, base+height+1, czl+dz, wallMat);
+}
+function buildHutSmall(d,cxl,czl,base){ buildWalledHouse(d,cxl,czl,base, 2,2, 3, PLANKS, LOG, GLASS); }
+function buildHouseMedium(d,cxl,czl,base){ buildWalledHouse(d,cxl,czl,base, 3,3, 4, PLANKS, LOG, GLASS); }
+function buildHouseLarge(d,cxl,czl,base){ buildWalledHouse(d,cxl,czl,base, 4,3, 4, PLANKS, LOG, GLASS); }
+function buildForge(d,cxl,czl,base){
+  buildWalledHouse(d,cxl,czl,base, 2,2, 3, COBBLE, COBBLE, GLASS);
+  const put = (px,py,pz,id) => { if (px<0||px>=CX||pz<0||pz>=CZ||py<0||py>=CY) return; d[li(px,py,pz)] = id; };
+  put(cxl-1, base+1, czl-1, LAVA); // fragua
+}
+function buildWell(d, cxl, czl, base){
+  const half = 2;
+  const put = (px,py,pz,id) => { if (px<0||px>=CX||pz<0||pz>=CZ||py<0||py>=CY) return; d[li(px,py,pz)] = id; };
+  for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++){
+    const edge = Math.abs(dx)===half || Math.abs(dz)===half;
+    put(cxl+dx, base, czl+dz, edge ? COBBLE : WATER);
+    if (edge) put(cxl+dx, base+1, czl+dz, COBBLE);
+  }
+  for(const [ddx,ddz] of [[-half,-half],[half,-half],[-half,half],[half,half]]){
+    for(let yy=1; yy<=3; yy++) put(cxl+ddx, base+yy, czl+ddz, LOG);
+  }
+  for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++) put(cxl+dx, base+4, czl+dz, PLANKS);
+}
+function buildFarm(d, cxl, czl, base){
+  const half = 3;
+  const put = (px,py,pz,id) => { if (px<0||px>=CX||pz<0||pz>=CZ||py<0||py>=CY) return; d[li(px,py,pz)] = id; };
+  for(let dz=-half; dz<=half; dz++) for(let dx=-half; dx<=half; dx++){
+    const edge = Math.abs(dx)===half || Math.abs(dz)===half;
+    if (edge){
+      const corner = Math.abs(dx)===half && Math.abs(dz)===half;
+      if (corner || dx===0 || dz===0) put(cxl+dx, base+1, czl+dz, LOG);
+      continue;
+    }
+    if (dx===0 && dz===0){ put(cxl+dx, base, czl+dz, WATER); continue; }
+    put(cxl+dx, base, czl+dz, DIRT);
+    if ((dx+dz+10)%2===0) put(cxl+dx, base+1, czl+dz, LEAVES); // "cultivo" simplificado
+  }
+}
+// tabla de edificios con peso (probabilidad relativa) y si cuenta como vivienda (aldeanos)
+const VILLAGE_BUILDERS = [
+  { build: buildHutSmall,    halfZ:2, isHome:true,  w:32 },
+  { build: buildHouseMedium, halfZ:3, isHome:true,  w:20 },
+  { build: buildHouseLarge,  halfZ:3, isHome:true,  w:12 },
+  { build: buildForge,       halfZ:2, isHome:true,  w:10 },
+  { build: buildWell,        halfZ:2, isHome:false, w:14 },
+  { build: buildFarm,        halfZ:3, isHome:false, w:12 },
+];
+function pickVillageBuilder(r){
+  const total = VILLAGE_BUILDERS.reduce((s,b)=>s+b.w,0);
+  let v = r*total;
+  for(const b of VILLAGE_BUILDERS){ if (v < b.w) return b; v -= b.w; }
+  return VILLAGE_BUILDERS[0];
 }
 
 // piedra o mineral según profundidad (de más rara/profunda a más común, como en Minecraft)
@@ -854,17 +906,21 @@ function generate(ch){
     }
     put(tx,top+1,tz,LEAVES,true);
   }
-  // aldeas: choza ocasional agrupada por región (varias chozas cercanas = una aldea),
-  // o forzada si este chunk fue elegido como punto de aparición inicial
+  // aldeas: edificio variado (casa chica/mediana/grande, herrería, pozo o granja) agrupado
+  // por región (varios edificios cercanos = una aldea más grande), o forzado si este chunk
+  // fue elegido como punto de aparición inicial
   {
     const forced = FORCE_VILLAGE.has(ckey(ch.cx,ch.cz));
     const region = fbm2(ch.cx*0.05, ch.cz*0.05, 2, 501);
-    if (forced || (region > 0.7 && ihash(ch.cx,4242,ch.cz) < 0.4)){
+    if (forced || (region > 0.62 && ihash(ch.cx,4242,ch.cz) < 0.55)){
       const wx = ox+8, wz = oz+8;
       const info = columnInfo(wx,wz);
       if (forced || (info.surf === GRASS && info.h > SEA+1)){
-        buildHut(d, 8, 8, info.h+1);
-        VILLAGES.push({ x: wx+0.5, y: info.h+2, z: oz+10.5, pop: 2+Math.floor(ihash(ch.cx,555,ch.cz)*2) });
+        const picked = forced ? VILLAGE_BUILDERS[0] : pickVillageBuilder(ihash(ch.cx,7654,ch.cz));
+        picked.build(d, 8, 8, info.h+1);
+        if (picked.isHome){
+          VILLAGES.push({ x: wx+0.5, y: info.h+2, z: oz+8+picked.halfZ+0.5, pop: 2+Math.floor(ihash(ch.cx,555,ch.cz)*2) });
+        }
       }
     }
   }
@@ -1627,14 +1683,20 @@ function physics(dt){
     // densidad del fluido: empuje flotante que compensa parte de la gravedad,
     // más resistencia (arrastre) sobre la velocidad vertical; la lava pesa más
     // y hunde más que el agua, y responde mucho menos al intento de nadar
-    const buoyancy = p.inLava ? 9 : 14, gravityFluid = 10, dragFluid = p.inLava ? 8 : 5;
-    const thrust = p.inLava ? 8 : 16;
-    const capUp = p.inLava ? 1.5 : 2.8, capDown = p.inLava ? -1.4 : -2.6;
-    p.vel.y += (buoyancy - gravityFluid) * dt;
-    if (keys.Space)  p.vel.y += thrust*dt;   // nadar activamente hacia la superficie
-    if (shiftHeld)   p.vel.y -= thrust*dt;   // bucear hacia el fondo
-    p.vel.y *= Math.max(0, 1 - dragFluid*dt);
-    p.vel.y = Math.max(capDown, Math.min(capUp, p.vel.y));
+    const buoyancy = p.inLava ? 9 : 17, gravityFluid = 10, dragFluid = p.inLava ? 8 : 4.5;
+    const thrust = p.inLava ? 8 : 20;
+    const capUp = p.inLava ? 1.5 : 3.6, capDown = p.inLava ? -1.4 : -2.6;
+    if (keys.Space && p.onGround && !p.inLava){
+      // agua poco profunda (parado en el fondo, p. ej. saliendo hacia la orilla): salto real,
+      // no el empuje de nado (mucho más débil) — esto es lo que impedía salir del agua
+      p.vel.y = 7.4;
+    } else {
+      p.vel.y += (buoyancy - gravityFluid) * dt;
+      if (keys.Space)  p.vel.y += thrust*dt;   // nadar activamente hacia la superficie
+      if (shiftHeld)   p.vel.y -= thrust*dt;   // bucear hacia el fondo
+      p.vel.y *= Math.max(0, 1 - dragFluid*dt);
+      p.vel.y = Math.max(capDown, Math.min(capUp, p.vel.y));
+    }
   } else if (p.fly){
     let vy = 0;
     if (keys.Space) vy += speed;
