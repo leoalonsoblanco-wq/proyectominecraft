@@ -385,6 +385,7 @@ const dirty  = new Set();
 const ckey = (cx,cz) => cx+','+cz;
 const li = (x,y,z) => y*CXZ + z*CX + x;
 const VILLAGES = [];               // { x,y,z, pop } de cada choza generada
+const FORCE_VILLAGE = new Set();   // ckeys que deben tener choza sí o sí (garantiza aldea de inicio)
 
 function buildHut(d, cxl, czl, base){
   const half = 2;
@@ -447,15 +448,17 @@ function generate(ch){
     }
     put(tx,top+1,tz,LEAVES,true);
   }
-  // aldeas: choza ocasional agrupada por región (varias chozas cercanas = una aldea)
+  // aldeas: choza ocasional agrupada por región (varias chozas cercanas = una aldea),
+  // o forzada si este chunk fue elegido como punto de aparición inicial
   {
+    const forced = FORCE_VILLAGE.has(ckey(ch.cx,ch.cz));
     const region = fbm2(ch.cx*0.05, ch.cz*0.05, 2, 501);
-    if (region > 0.7 && ihash(ch.cx,4242,ch.cz) < 0.4){
+    if (forced || (region > 0.7 && ihash(ch.cx,4242,ch.cz) < 0.4)){
       const wx = ox+8, wz = oz+8;
       const info = columnInfo(wx,wz);
-      if (info.surf === GRASS && info.h > SEA+1){
+      if (forced || (info.surf === GRASS && info.h > SEA+1)){
         buildHut(d, 8, 8, info.h+1);
-        VILLAGES.push({ x: wx+0.5, y: info.h+1, z: oz+10.5, pop: 2+Math.floor(ihash(ch.cx,555,ch.cz)*2) });
+        VILLAGES.push({ x: wx+0.5, y: info.h+2, z: oz+10.5, pop: 2+Math.floor(ihash(ch.cx,555,ch.cz)*2) });
       }
     }
   }
@@ -1218,13 +1221,29 @@ function findSafeSpawn(startX, startZ){
   }
   return { x:sx, z:sz, y: SEA + 3 };
 }
+// busca en espiral (barato: solo consulta altura/bioma, no genera chunks) el chunk más
+// cercano al origen con terreno seco y llano, para forzar ahí la aldea de aparición inicial
+function pickSpawnVillageChunk(maxR){
+  for(let r=0; r<=maxR; r++){
+    for(let dz=-r; dz<=r; dz++) for(let dx=-r; dx<=r; dx++){
+      if (Math.max(Math.abs(dx),Math.abs(dz)) !== r) continue;
+      const info = columnInfo(dx*CX+8, dz*CX+8);
+      if (info.surf === GRASS && info.h > SEA+1) return { cx:dx, cz:dz };
+    }
+  }
+  return { cx:0, cz:0 };
+}
 
 const loaded = load();
 document.getElementById('seedTxt').textContent = 'semilla ' + SEED;
 if (!loaded){
-  const s = findSafeSpawn(8, 8);
-  player.pos.set(s.x+0.5, s.y, s.z+0.5);
-  player.spawnX = s.x; player.spawnZ = s.z;
+  const vc = pickSpawnVillageChunk(24);
+  FORCE_VILLAGE.add(ckey(vc.cx, vc.cz));
+  getChunk(vc.cx, vc.cz);
+  const v = VILLAGES[VILLAGES.length-1];
+  player.pos.set(v.x, v.y, v.z);
+  player.spawnX = Math.floor(v.x); player.spawnZ = Math.floor(v.z);
+  toast('Apareces junto a una aldea');
 } else {
   // si la partida guardada te dejó sumergido (p. ej. cerraste el juego nadando), reubica en tierra firme
   const eyeB  = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + player.EYE), Math.floor(player.pos.z));
