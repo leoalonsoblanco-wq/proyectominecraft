@@ -13,9 +13,13 @@
   #crosshair { position:fixed; left:50%; top:50%; width:22px; height:22px;
                transform:translate(-50%,-50%); pointer-events:none; opacity:.85; }
   #crosshair:before, #crosshair:after { content:""; position:absolute; background:#fff;
-               box-shadow:0 0 2px #000; }
+               box-shadow:0 0 2px #000; transition:background .08s; }
   #crosshair:before { left:50%; top:0; width:2px; height:100%; margin-left:-1px; }
   #crosshair:after  { top:50%; left:0; height:2px; width:100%; margin-top:-1px; }
+  #crosshair.target:before, #crosshair.target:after { background:#e05a5a; }
+
+  #vignette { position:fixed; inset:0; pointer-events:none; z-index:3;
+              box-shadow:inset 0 0 min(22vw,220px) rgba(0,0,0,.35); }
 
   #hud { position:fixed; left:10px; top:10px; font:12px/1.5 ui-monospace,Consolas,monospace;
          text-shadow:1px 1px 2px #000; pointer-events:none; white-space:pre; opacity:.9; }
@@ -112,6 +116,7 @@
 <body>
 <canvas id="app"></canvas>
 
+<div id="vignette"></div>
 <div id="crosshair"></div>
 <div id="mineBar"><div id="mineBarFill"></div></div>
 <div id="hud"></div>
@@ -182,6 +187,9 @@
 
 <script type="module">
 import * as THREE from 'three';
+import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js';
 
 /* ============================================================
    1. CONSTANTES Y DEFINICIÓN DE BLOQUES
@@ -453,6 +461,8 @@ mesherWorker.onmessage = (e) => {
     const m = new THREE.Mesh(g, MATS[L]);
     m.position.set(ch.cx*CX, 0, ch.cz*CZ);
     m.renderOrder = L;
+    m.castShadow = (L !== 2);    // el agua/cristal (translúcido) no proyecta sombra, sí la recibe
+    m.receiveShadow = true;
     scene.add(m);
     ch.meshes[L] = m;
   }
@@ -957,6 +967,10 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.08, 2000);
@@ -966,11 +980,25 @@ let RENDER_DIST = 7;
 scene.fog = new THREE.Fog(0x88bbee, RENDER_DIST*CX*0.45, RENDER_DIST*CX*0.95);
 
 const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1536, 1536);
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 150;
+sun.shadow.camera.left = -55; sun.shadow.camera.right = 55;
+sun.shadow.camera.top = 55; sun.shadow.camera.bottom = -55;
+sun.shadow.bias = -0.0015;
+sun.shadow.camera.updateProjectionMatrix();
 scene.add(sun);
+// la luna no proyecta sombra propia (mantiene el costo del shadow map acotado a una sola pasada)
 const moon = new THREE.DirectionalLight(0x9fb6dd, 0.0);
 scene.add(moon);
 const ambient = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambient);
+
+// post-procesado ligero: bloom sutil (solo lo muy brillante: lava, piedra luminosa, sol)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.55, 0.86);
+composer.addPass(bloomPass);
 
 // cielo
 const skyMat = new THREE.ShaderMaterial({
@@ -1052,9 +1080,11 @@ function buildBedMesh(yaw){
   const mattress = new THREE.Mesh(new THREE.BoxGeometry(0.94,0.55,0.94),
     new THREE.MeshLambertMaterial({ color:0xc94141 }));
   mattress.position.set(0,-0.22,0);
+  mattress.castShadow = true; mattress.receiveShadow = true;
   const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.2,0.3),
     new THREE.MeshLambertMaterial({ color:0xe8e8e8 }));
   pillow.position.set(0,0.03,-0.3);
+  pillow.castShadow = true; pillow.receiveShadow = true;
   g.add(mattress, pillow);
   g.rotation.y = yaw;
   return g;
@@ -1231,6 +1261,7 @@ const overlay = document.getElementById('overlay');
 const hudEl   = document.getElementById('hud');
 const nameEl  = document.getElementById('name');
 const mineBarWrap = document.getElementById('mineBar');
+const crosshairEl = document.getElementById('crosshair');
 const mineBarFill = document.getElementById('mineBarFill');
 
 /* --- panel de crafteo --- */
@@ -1341,6 +1372,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
 let toastTimer = 0;
@@ -1993,6 +2025,7 @@ function survivalTick(dt){
 function boxAt(w,h,d,color,cx,cy,cz){
   const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), new THREE.MeshLambertMaterial({ color }));
   m.position.set(cx,cy,cz);
+  m.castShadow = true; m.receiveShadow = true;
   return m;
 }
 function limbBox(w,h,d,color,x,topY,z){
@@ -2000,6 +2033,7 @@ function limbBox(w,h,d,color,x,topY,z){
   g.translate(0,-h/2,0);
   const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color }));
   m.position.set(x,topY,z);
+  m.castShadow = true; m.receiveShadow = true;
   return m;
 }
 function buildHumanoid(skin, shirt, pants){
@@ -2355,6 +2389,7 @@ function frame(now){
   sun.position.set(sx2*100, sy*100, 40).add(camera.position);
   sun.target.position.copy(camera.position); sun.target.updateMatrixWorld();
   sun.intensity = dayAmt * 1.05;
+  sun.castShadow = dayAmt > 0.03; // de noche el sol casi no aporta luz: nos ahorramos el pase de sombra
   sun.color.setHex(0xffffff).lerp(cDusk, duskAmt*0.6);
   moon.position.set(-sx2*100, -sy*100, -40).add(camera.position);
   moon.target.position.copy(camera.position); moon.target.updateMatrixWorld();
@@ -2396,6 +2431,7 @@ function frame(now){
   const hit = active ? raycast(6) : null;
   if (hit){ highlight.visible = true; highlight.position.set(hit.x+0.5, hit.y+0.5, hit.z+0.5); }
   else highlight.visible = false;
+  crosshairEl.classList.toggle('target', !!(active && raycastEntity(4.5)));
 
   streamChunks(dt);
   updateParticles(dt);
@@ -2421,7 +2457,7 @@ function frame(now){
       `Semilla ${SEED}`;
   }
 
-  renderer.render(scene, camera);
+  composer.render();
 }
 
 const mouseDown = [false,false,false];
