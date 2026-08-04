@@ -174,10 +174,11 @@ const BLOCKS = [
   { name:'Mineral de oro',      t:[18,18,18], opaque:true, layer:0 },
   { name:'Mineral de diamante', t:[19,19,19], opaque:true, layer:0 },
   { name:'Piedra luminosa', t:[20,20,20], opaque:true, layer:0, light:13 },
+  { name:'Lava', t:[21,21,21], opaque:true, layer:0, liquid:true, light:12 },
 ];
 const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
       PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14,
-      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19;
+      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20;
 
 const HOTBAR = [GRASS, STONE, COBBLE, DIRT, SAND, LOG, PLANKS, GLASS, BRICK, LIGHTSTONE];
 
@@ -295,6 +296,11 @@ const TILE_DRAW = [
   (g,rnd,px)=>{ noisyFill(g,rnd,px,255,241,196,0.1);
     for(let i=0;i<40;i++) px(rnd()*TILE|0,rnd()*TILE|0,shade(255,214,120,1));
     g.fillStyle='rgba(255,255,255,.5)'; g.fillRect(10,10,12,12); },
+  // 21 lava
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,196,58,12,0.16);
+    for(let i=0;i<10;i++){ const x=rnd()*TILE|0, y=rnd()*TILE|0, w=4+(rnd()*8|0);
+      g.fillStyle=shade(255,168,40,1); g.fillRect(x,y,w,2); }
+    for(let i=0;i<16;i++) px(rnd()*TILE|0,rnd()*TILE|0,shade(90,20,10,1)); },
 ];
 
 function buildAtlas(){
@@ -640,6 +646,17 @@ function generate(ch){
   }
   // cuevas grandes: túneles tipo "gusano" (ver carveCaves)
   carveCaves(d, ox, oz);
+  // lava: charcos ocasionales en el suelo de cuevas profundas
+  for(let z=0; z<CZ; z++) for(let x=0; x<CX; x++){
+    const wx=ox+x, wz=oz+z;
+    for(let y=2; y<=8; y++){
+      const i = li(x,y,z);
+      if (d[i] !== AIR) continue;
+      const below = d[li(x,y-1,z)];
+      if (below===AIR || below===WATER || below===LAVA) continue;
+      if (ihash(wx, y*13, wz) < 0.05) d[i] = LAVA;
+    }
+  }
   // árboles (se recorren columnas vecinas para que crucen los bordes del chunk)
   for(let tz=-3; tz<CZ+3; tz++) for(let tx=-3; tx<CX+3; tx++){
     const wx=ox+tx, wz=oz+tz;
@@ -714,6 +731,41 @@ function setBlock(wx,wy,wz,id){
   if (lz===CZ-1) { const n=chunks.get(ckey(cx,cz+1)); if(n) dirty.add(n); }
 }
 const isSolid = (x,y,z) => { const b=getBlock(x,y,z); return b!==AIR && !BLOCKS[b].liquid; };
+
+/* --- flujo simple de fluidos: al abrir un hueco junto a agua/lava, se derrama y
+   se propaga (cae sin límite, se extiende un número acotado de bloques a los lados;
+   bajar reinicia el alcance, como en Minecraft). Reactivo (se dispara al romper un
+   bloque), no es una simulación continua por tick — así no cuesta nada mientras
+   el jugador no está minando cerca de un fluido. */
+const FLUID_REACH = { [WATER]:6, [LAVA]:3 };
+const FLUID_BUDGET = 400; // tope de bloques por derrame, para no colgar el frame
+function spreadFluidFrom(wx,wy,wz){
+  let fluidId = 0;
+  for(const [dx,dy,dz] of [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]]){
+    const b = getBlock(wx+dx, wy+dy, wz+dz);
+    if (b===WATER || b===LAVA){ fluidId = b; break; }
+  }
+  if (!fluidId) return;
+  const maxDist = FLUID_REACH[fluidId];
+  const seen = new Set([wx+','+wy+','+wz]);
+  const queue = [[wx,wy,wz,maxDist]];
+  let filled = 0, qi = 0;
+  while (qi < queue.length && filled < FLUID_BUDGET){
+    const [x,y,z,dist] = queue[qi++];
+    if (getBlock(x,y,z) !== AIR) continue;
+    setBlock(x,y,z,fluidId);
+    filled++;
+    const bk = x+','+(y-1)+','+z;
+    if (y-1>=1 && !seen.has(bk) && getBlock(x,y-1,z)===AIR){ seen.add(bk); queue.push([x,y-1,z,maxDist]); }
+    if (dist>0){
+      for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){
+        const nx=x+dx, nz=z+dz, k=nx+','+y+','+nz;
+        if (seen.has(k) || getBlock(nx,y,nz)!==AIR) continue;
+        seen.add(k); queue.push([nx,y,nz,dist-1]);
+      }
+    }
+  }
+}
 
 /* ============================================================
    5. MALLADO DE CHUNKS (con oclusión ambiental por vértice)
@@ -937,7 +989,7 @@ function updateSwimBubbles(dt){
 /* ============================================================
    7. SONIDO (sintetizado, sin archivos)
    ============================================================ */
-let actx = null, noiseBuf = null;
+let actx = null, noiseBuf = null, ambientNodes = null;
 function initAudio(){
   if (actx) return;
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -946,6 +998,23 @@ function initAudio(){
   noiseBuf = actx.createBuffer(1, actx.sampleRate*0.5, actx.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+
+  // viento ambiente: bucle de ruido filtrado en volumen bajo (nada de archivos externos)
+  const src = actx.createBufferSource();
+  src.buffer = noiseBuf; src.loop = true;
+  const filt = actx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 500;
+  const gain = actx.createGain(); gain.gain.value = 0.04;
+  src.connect(filt); filt.connect(gain); gain.connect(actx.destination);
+  src.start();
+  ambientNodes = { filt, gain };
+}
+// más viento de noche, más apagado y grave bajo tierra
+function updateAmbient(dayAmt, underground){
+  if (!ambientNodes) return;
+  const targetGain = underground ? 0.025 : (0.035 + (1-dayAmt)*0.05);
+  const targetFreq = underground ? 220 : 500;
+  ambientNodes.gain.gain.value += (targetGain - ambientNodes.gain.gain.value) * 0.05;
+  ambientNodes.filt.frequency.value += (targetFreq - ambientNodes.filt.frequency.value) * 0.05;
 }
 function sfx(freq, dur, vol, q){
   if (!actx) return;
@@ -958,9 +1027,28 @@ function sfx(freq, dur, vol, q){
   src.connect(f); f.connect(g); g.connect(actx.destination);
   src.start(t); src.stop(t+dur);
 }
-const sndBreak = () => sfx(760, 0.18, 0.35, 1.0);
-const sndPlace = () => sfx(420, 0.12, 0.30, 1.4);
-const sndStep  = () => sfx(280 + Math.random()*160, 0.07, 0.12, 2.0);
+// sonido por tipo de material (pasos / romper / colocar comparten la misma tabla)
+const MAT_SOUND = {};
+(function(){
+  const set = (ids, f, q) => { for(const id of ids) MAT_SOUND[id] = { f, q }; };
+  set([GRASS, LEAVES], 320, 1.6);
+  set([DIRT, GRAVEL], 210, 1.3);
+  set([STONE, COBBLE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE, BEDROCK, LIGHTSTONE], 150, 2.4);
+  set([SAND], 420, 0.7);
+  set([SNOW], 520, 0.5);
+  set([LOG, PLANKS], 260, 2.0);
+  set([BRICK], 180, 2.2);
+  set([GLASS], 700, 0.5);
+})();
+const matSoundOf = id => MAT_SOUND[id] || { f:280, q:2.0 };
+
+function sndBreak(id){ const m = matSoundOf(id); sfx(m.f*1.7, 0.18, 0.35, m.q*0.55); }
+function sndPlace(id){ const m = matSoundOf(id); sfx(m.f*1.1, 0.12, 0.30, m.q*0.7); }
+function sndStep(){
+  const below = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y-0.05), Math.floor(player.pos.z));
+  const m = matSoundOf(below);
+  sfx(m.f + Math.random()*60 - 20, 0.07, 0.12, m.q);
+}
 const sndSplash= () => sfx(900, 0.35, 0.25, 0.6);
 const sndSwim  = () => sfx(520 + Math.random()*140, 0.24, 0.16, 1.0);
 
@@ -1009,7 +1097,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement !== canvas) return;
-  const sens = player.inWater ? 0.0022 * 0.85 : 0.0022; // leve, solo un matiz bajo el agua
+  const sens = player.inFluid ? 0.0022 * 0.85 : 0.0022; // leve, solo un matiz dentro de un fluido
   player.yaw   -= e.movementX * sens;
   player.pitch -= e.movementY * sens;
   const lim = Math.PI/2 - 0.001;
@@ -1082,32 +1170,46 @@ function collide(axis, delta){
   const x0 = Math.floor(p.x-W), x1 = Math.floor(p.x+W);
   const y0 = Math.floor(p.y),   y1 = Math.floor(p.y+H);
   const z0 = Math.floor(p.z-W), z1 = Math.floor(p.z+W);
+  // busca, entre TODAS las celdas sólidas del barrido, la más restrictiva (la más
+  // cercana a la posición previa); resolver solo contra la primera encontrada por
+  // orden de bucle podía dejar al jugador incrustado si había más de un bloque sólido
+  let hit = null;
   for(let y=y0;y<=y1;y++) for(let z=z0;z<=z1;z++) for(let x=x0;x<=x1;x++){
     if (!isSolid(x,y,z)) continue;
+    const coord = axis==='y' ? y : (axis==='x' ? x : z);
+    if (hit===null || (delta>0 ? coord<hit : coord>hit)) hit = coord;
+  }
+  if (hit !== null){
     if (axis === 'y'){
-      if (delta > 0){ p.y = y - H - eps; }
-      else { p.y = y + 1 + eps; player.onGround = true; }
+      if (delta > 0){ p.y = hit - H - eps; }
+      else { p.y = hit + 1 + eps; player.onGround = true; }
       player.vel.y = 0;
     } else if (axis === 'x'){
-      p.x = delta > 0 ? x - W - eps : x + 1 + W + eps;
+      p.x = delta > 0 ? hit - W - eps : hit + 1 + W + eps;
       player.vel.x = 0;
     } else {
-      p.z = delta > 0 ? z - W - eps : z + 1 + W + eps;
+      p.z = delta > 0 ? hit - W - eps : hit + 1 + W + eps;
       player.vel.z = 0;
     }
-    return;
   }
 }
 
-let stepTimer = 0, wasInWater = false, fallDistance = 0, swimRoll = 0;
+let stepTimer = 0, wasInWater = false, fallDistance = 0, swimRoll = 0, lavaBurnTimer = 0.3;
 function physics(dt){
   const p = player;
   const head = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y + p.EYE), Math.floor(p.pos.z));
   const feet = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y + 0.2), Math.floor(p.pos.z));
   p.inWater = (head === WATER || feet === WATER);
+  p.inLava  = (head === LAVA  || feet === LAVA);
+  p.inFluid = p.inWater || p.inLava;
   p.headSubmerged = (head === WATER);
+  p.headInLava    = (head === LAVA);
   if (p.inWater && !wasInWater) sndSplash();
   wasInWater = p.inWater;
+  if (p.inLava){
+    lavaBurnTimer -= dt;
+    if (lavaBurnTimer <= 0){ damagePlayer(2, 'la lava'); lavaBurnTimer = 0.5; }
+  } else lavaBurnTimer = 0.3;
   const prevY = p.pos.y;
 
   // dirección de entrada relativa a la cámara
@@ -1125,23 +1227,26 @@ function physics(dt){
 
   const shiftHeld = keys.ShiftLeft || keys.ShiftRight;
   const sprint = shiftHeld && (p.fly || p.hunger > 0);
-  let speed = p.inWater
-    ? (p.fly ? (sprint ? 10 : 7) : 2.6)                  // nadar: más lento que caminar, sin ser extremo
+  let speed = p.inFluid
+    ? (p.inLava ? (p.fly ? 4 : 1.1) : (p.fly ? (sprint ? 10 : 7) : 2.6))  // lava: bien lento y pesado
     : (p.fly ? (sprint ? 26 : 12) : (sprint ? 8.2 : 4.6));
-  const accel = p.inWater ? 6 : (p.onGround || p.fly ? 42 : 12);
+  const accel = p.inLava ? 3 : (p.inWater ? 6 : (p.onGround || p.fly ? 42 : 12));
 
   p.vel.x += (dx*speed - p.vel.x) * Math.min(1, accel*dt);
   p.vel.z += (dz*speed - p.vel.z) * Math.min(1, accel*dt);
 
-  if (p.inWater){
-    // densidad del agua: empuje flotante que compensa parte de la gravedad,
-    // más resistencia (arrastre) sobre la velocidad vertical
-    const buoyancy = 14, gravityWater = 10, dragWater = 5;
-    p.vel.y += (buoyancy - gravityWater) * dt;
-    if (keys.Space)  p.vel.y += 16*dt;   // nadar activamente hacia la superficie
-    if (shiftHeld)   p.vel.y -= 16*dt;   // bucear hacia el fondo
-    p.vel.y *= Math.max(0, 1 - dragWater*dt);
-    p.vel.y = Math.max(-2.6, Math.min(2.8, p.vel.y));
+  if (p.inFluid){
+    // densidad del fluido: empuje flotante que compensa parte de la gravedad,
+    // más resistencia (arrastre) sobre la velocidad vertical; la lava pesa más
+    // y hunde más que el agua, y responde mucho menos al intento de nadar
+    const buoyancy = p.inLava ? 9 : 14, gravityFluid = 10, dragFluid = p.inLava ? 8 : 5;
+    const thrust = p.inLava ? 8 : 16;
+    const capUp = p.inLava ? 1.5 : 2.8, capDown = p.inLava ? -1.4 : -2.6;
+    p.vel.y += (buoyancy - gravityFluid) * dt;
+    if (keys.Space)  p.vel.y += thrust*dt;   // nadar activamente hacia la superficie
+    if (shiftHeld)   p.vel.y -= thrust*dt;   // bucear hacia el fondo
+    p.vel.y *= Math.max(0, 1 - dragFluid*dt);
+    p.vel.y = Math.max(capDown, Math.min(capUp, p.vel.y));
   } else if (p.fly){
     let vy = 0;
     if (keys.Space) vy += speed;
@@ -1161,11 +1266,12 @@ function physics(dt){
   // daño por caída (se acumula mientras se desciende, se aplica al aterrizar)
   if (p.onGround){
     if (fallDistance > 3){
-      const landedInWater = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y-0.1), Math.floor(p.pos.z)) === WATER || p.inWater;
-      if (!landedInWater) damagePlayer(Math.floor(fallDistance-3), 'caída');
+      const landedB = getBlock(Math.floor(p.pos.x), Math.floor(p.pos.y-0.1), Math.floor(p.pos.z));
+      const landedInFluid = landedB === WATER || landedB === LAVA || p.inFluid;
+      if (!landedInFluid) damagePlayer(Math.floor(fallDistance-3), 'caída');
     }
     fallDistance = 0;
-  } else if (p.inWater){
+  } else if (p.inFluid){
     fallDistance = 0;
   } else if (!p.fly){
     const dy = prevY - p.pos.y;
@@ -1180,10 +1286,12 @@ function physics(dt){
   // pasos / brazadas de nado
   const moving = Math.hypot(p.vel.x, p.vel.z) > 1.5;
   const swimSpeed = p.vel.length();
-  if (p.inWater){
+  if (p.inFluid){
     stepTimer -= dt;
-    if (swimSpeed > 1.1 && stepTimer <= 0){ sndSwim(); spawnSwimBubble(); stepTimer = 0.5; }
-    else if (swimSpeed <= 1.1) stepTimer = Math.min(stepTimer, 0.15);
+    if (swimSpeed > 1.1 && stepTimer <= 0){
+      if (p.inWater){ sndSwim(); spawnSwimBubble(); }
+      stepTimer = 0.5;
+    } else if (swimSpeed <= 1.1) stepTimer = Math.min(stepTimer, 0.15);
   } else if (p.onGround && moving){
     stepTimer -= dt;
     if (stepTimer <= 0){ sndStep(); stepTimer = sprint ? 0.3 : 0.42; }
@@ -1191,7 +1299,7 @@ function physics(dt){
 
   // balanceo de la mano (paso) o brazada de nado + balanceo de cámara
   let bob = 0, sway = 0.6;
-  if (p.inWater){
+  if (p.inFluid){
     // brazada continua de nado: nunca queda quieto como al caminar, siempre "rema" para flotar
     const t = performance.now()*0.0026;
     const amp = 0.4 + Math.min(1, swimSpeed/3) * 0.6; // brazada suave incluso quieto, más marcada al nadar
@@ -1267,7 +1375,8 @@ function doBreak(){
   if (!h || BLOCKS[h.id].unbreakable) return;
   spawnParticles(h.x, h.y, h.z, h.id);
   setBlock(h.x, h.y, h.z, AIR);
-  sndBreak();
+  spreadFluidFrom(h.x, h.y, h.z);
+  sndBreak(h.id);
   if (h.id === LEAVES && Math.random() < 0.12){
     inv.apple++;
     toast('+1 Manzana');
@@ -1282,7 +1391,7 @@ function doPlace(){
   if (cur !== AIR && !BLOCKS[cur].liquid) return;
   if (boxBlocksPlayer(x,y,z)) return;
   setBlock(x, y, z, HOTBAR[sel]);
-  sndPlace();
+  sndPlace(HOTBAR[sel]);
 }
 
 /* ============================================================
@@ -1402,11 +1511,11 @@ if (!loaded){
   // si la partida guardada te dejó sumergido (p. ej. cerraste el juego nadando), reubica en tierra firme
   const eyeB  = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + player.EYE), Math.floor(player.pos.z));
   const feetB = getBlock(Math.floor(player.pos.x), Math.floor(player.pos.y + 0.2),        Math.floor(player.pos.z));
-  if (eyeB === WATER || feetB === WATER){
+  if (eyeB === WATER || feetB === WATER || eyeB === LAVA || feetB === LAVA){
     const s = findSafeSpawn(Math.floor(player.pos.x), Math.floor(player.pos.z));
     player.pos.set(s.x+0.5, s.y, s.z+0.5);
     player.vel.set(0,0,0);
-    toast('Te sacamos del agua: apareces en tierra firme');
+    toast('Te sacamos del agua/lava: apareces en tierra firme');
   }
 }
 setSel(sel);
@@ -1459,6 +1568,7 @@ const underwaterEl = document.getElementById('underwater');
 const deathOverlay = document.getElementById('deathOverlay');
 const deathReasonEl = document.getElementById('deathReason');
 const uwFogColor = new THREE.Color(0x1d5f8f);
+const uwFogColorLava = new THREE.Color(0x8a2a0a);
 let underwaterAmt = 0;
 
 function statesFor(value){
@@ -1700,12 +1810,16 @@ function collideEntity(e, axis, delta){
   const x0=Math.floor(p.x-W), x1=Math.floor(p.x+W);
   const y0=Math.floor(p.y),   y1=Math.floor(p.y+H);
   const z0=Math.floor(p.z-W), z1=Math.floor(p.z+W);
+  let hit = null;
   for(let y=y0;y<=y1;y++) for(let z=z0;z<=z1;z++) for(let x=x0;x<=x1;x++){
     if (!isSolid(x,y,z)) continue;
-    if (axis==='y'){ if (delta>0) p.y=y-H-eps; else { p.y=y+1+eps; e.onGround=true; } e.vel.y=0; }
-    else if (axis==='x'){ p.x = delta>0 ? x-W-eps : x+1+W+eps; e.vel.x=0; }
-    else { p.z = delta>0 ? z-W-eps : z+1+W+eps; e.vel.z=0; }
-    return;
+    const coord = axis==='y' ? y : (axis==='x' ? x : z);
+    if (hit===null || (delta>0 ? coord<hit : coord>hit)) hit = coord;
+  }
+  if (hit !== null){
+    if (axis==='y'){ if (delta>0) p.y=hit-H-eps; else { p.y=hit+1+eps; e.onGround=true; } e.vel.y=0; }
+    else if (axis==='x'){ p.x = delta>0 ? hit-W-eps : hit+1+W+eps; e.vel.x=0; }
+    else { p.z = delta>0 ? hit-W-eps : hit+1+W+eps; e.vel.z=0; }
   }
 }
 
@@ -1852,6 +1966,11 @@ function updateEntities(dt){
 
     const feetBlock = getBlock(Math.floor(e.pos.x), Math.floor(e.pos.y), Math.floor(e.pos.z));
     if (feetBlock === WATER) e.vel.y += (2 - e.vel.y) * Math.min(1, 6*dt);
+    else if (feetBlock === LAVA){
+      e.vel.y += (0.6 - e.vel.y) * Math.min(1, 4*dt); // se hunde despacio en la lava
+      e.burnT = (e.burnT||0) - dt;
+      if (e.burnT <= 0){ e.hp -= 3; e.burnT = 0.5; if (e.hp <= 0) killEntity(e); }
+    }
     else e.vel.y = Math.max(e.vel.y - 28*dt, -50);
 
     if ((moveX || moveZ) && e.onGround){
@@ -1935,6 +2054,8 @@ function frame(now){
   dayAmt = clamp01((sy + 0.16) / 0.40);
   const duskAmt = Math.exp(-(sy/0.22)*(sy/0.22)) * clamp01(0.5 + sx2);
   if (active){ trySpawnMobs(dt); updateEntities(dt); }
+  const colHere = columnInfo(Math.floor(player.pos.x), Math.floor(player.pos.z)).h;
+  updateAmbient(dayAmt, player.pos.y < colHere - 2);
 
   sun.position.set(sx2*100, sy*100, 40).add(camera.position);
   sun.target.position.copy(camera.position); sun.target.updateMatrixWorld();
@@ -1952,18 +2073,22 @@ function frame(now){
   skyMat.uniforms.bot.value.copy(tmpB);
   scene.fog.color.copy(tmpB).lerp(tmpA, 0.25);
 
-  // niebla y tinte bajo el agua (densidad visual: visibilidad corta y agua turbia)
-  const wantUW = (active && player.headSubmerged) ? 1 : 0;
+  // niebla y tinte bajo el agua o la lava (densidad visual: visibilidad corta y medio turbio)
+  const inLavaView = active && player.headInLava;
+  const wantUW = (active && (player.headSubmerged || player.headInLava)) ? 1 : 0;
   underwaterAmt += (wantUW - underwaterAmt) * Math.min(1, dt*6);
   const normalNear = RENDER_DIST*CX*0.45, normalFar = RENDER_DIST*CX*0.95;
   if (underwaterAmt > 0.001){
-    scene.fog.color.lerp(uwFogColor, underwaterAmt*0.9);
+    scene.fog.color.lerp(inLavaView ? uwFogColorLava : uwFogColor, underwaterAmt*0.9);
     scene.fog.near = lerp(normalNear, 1.2, underwaterAmt);
-    scene.fog.far  = lerp(normalFar, 20, underwaterAmt);
+    scene.fog.far  = lerp(normalFar, inLavaView ? 4 : 20, underwaterAmt);
     ambient.intensity *= lerp(1, 0.55, underwaterAmt);
   } else {
     scene.fog.near = normalNear; scene.fog.far = normalFar;
   }
+  underwaterEl.style.background = inLavaView
+    ? 'radial-gradient(ellipse at center, rgba(200,60,10,.28) 35%, rgba(120,20,5,.8) 100%)'
+    : '';
   underwaterEl.style.opacity = underwaterAmt.toFixed(3);
   renderer.setClearColor(scene.fog.color);
 
@@ -1994,7 +2119,7 @@ function frame(now){
       `Chunk ${Math.floor(p.x/CX)}, ${Math.floor(p.z/CZ)}   cargados: ${chunks.size}\n` +
       `Mirando: ${hit ? BLOCKS[hit.id].name + ' @ ' + hit.x + ',' + hit.y + ',' + hit.z : '—'}\n` +
       `Hora ${String(Math.floor(dayTime*24)).padStart(2,'0')}:${String(Math.floor(dayTime*24*60)%60).padStart(2,'0')}   ` +
-      `dist ${RENDER_DIST}   ${player.fly ? 'volando' : (player.inWater ? 'en el agua' : (player.onGround ? 'en el suelo' : 'cayendo'))}\n` +
+      `dist ${RENDER_DIST}   ${player.fly ? 'volando' : (player.inLava ? 'en lava' : (player.inWater ? 'en el agua' : (player.onGround ? 'en el suelo' : 'cayendo')))}\n` +
       `Vida ${player.health.toFixed(1)}/${player.maxHealth}   Hambre ${player.hunger.toFixed(1)}/${player.maxHunger}   Aire ${player.air.toFixed(1)}/${player.maxAir}   Manzanas ${inv.apple}\n` +
       `Entidades ${ENTITIES.length}   Aldeas ${VILLAGES.length}\n` +
       `Semilla ${SEED}`;
