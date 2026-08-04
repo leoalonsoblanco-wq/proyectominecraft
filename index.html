@@ -181,7 +181,7 @@
         <b>Clic central</b><span>Copiar bloque</span>
         <b>0 - 9 / Rueda</b><span>Elegir bloque/herramienta</span>
         <b>F</b><span>Modo vuelo</span>
-        <b>E</b><span>Comer una manzana</span>
+        <b>E</b><span>Comer (manzana o carne, la que tengas)</span>
         <b>C</b><span>Crafteo</span>
         <b>Clic der. en cama</b><span>Dormir (de noche)</span>
         <b>F3</b><span>Info de depuración</span>
@@ -296,7 +296,17 @@ const STONE_CATEGORY = new Set([STONE, COBBLE, LIGHTSTONE, COAL_ORE, IRON_ORE, G
 const ORE_TIER = { [STONE]:1, [COBBLE]:1, [COAL_ORE]:1, [IRON_ORE]:2, [GOLD_ORE]:3, [DIAMOND_ORE]:3 };
 // qué material otorga cada bloque al recogerlo
 const DROP_MAP  = { [LOG]:'wood', [STONE]:'stone', [COBBLE]:'stone', [COAL_ORE]:'coal', [IRON_ORE]:'iron', [GOLD_ORE]:'gold', [DIAMOND_ORE]:'diamond' };
-const DROP_NAME = { wood:'Madera', stone:'Piedra', coal:'Carbón', iron:'Hierro', gold:'Oro', diamond:'Diamante' };
+const DROP_NAME = { wood:'Madera', stone:'Piedra', coal:'Carbón', iron:'Hierro', gold:'Oro', diamond:'Diamante',
+  beef:'Carne de vaca', pork:'Carne de cerdo', rotten:'Carne podrida', gunpowder:'Pólvora', apple:'Manzana' };
+// qué sueltan los mobs al morir (no se aplica en modo creativo)
+const MOB_DROP = { cow:'beef', pig:'pork', zombie:'rotten', creeper:'gunpowder' };
+// cuánta hambre restaura cada comida (E la come, probando en este orden de preferencia)
+const FOOD_ITEMS = [
+  { key:'apple',  restore:4  },
+  { key:'beef',   restore:5  },
+  { key:'pork',   restore:5  },
+  { key:'rotten', restore:2  }, // carne podrida: alimenta poco, es el último recurso
+];
 
 // herramientas: id negativo para distinguirlas de los bloques (id>=0) dentro del hotbar
 const TOOL_PICK_WOOD=-1, TOOL_PICK_STONE=-2, TOOL_PICK_IRON=-3,
@@ -1303,7 +1313,7 @@ const player = {
   spawnX: 8, spawnZ: 8,
   mode: 'survival',
 };
-const inv = { apple:0, wood:0, stone:0, coal:0, iron:0, gold:0, diamond:0 };
+const inv = { apple:0, wood:0, stone:0, coal:0, iron:0, gold:0, diamond:0, beef:0, pork:0, rotten:0, gunpowder:0 };
 const keys = Object.create(null);
 let sel = 0, showDebug = false;
 
@@ -1335,7 +1345,7 @@ function closeCraft(){
 document.getElementById('craftClose').onclick = e => { e.stopPropagation(); closeCraft(); };
 
 function renderCraftPanel(){
-  craftMatsEl.innerHTML = ['wood','stone','coal','iron','gold','diamond']
+  craftMatsEl.innerHTML = ['wood','stone','coal','iron','gold','diamond','beef','pork','rotten','gunpowder']
     .map(k => `<span>${DROP_NAME[k]}: ${inv[k]||0}</span>`).join('');
   craftListEl.innerHTML = '';
   for(const r of RECIPES){
@@ -1469,7 +1479,7 @@ addEventListener('keydown', e => {
     lastSpace = now;
   }
   if (k === 'KeyF' && player.mode === 'creative'){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
-  if (k === 'KeyE'){ eatApple(); }
+  if (k === 'KeyE'){ eatFood(); }
   if (k === 'KeyC'){
     if (craftOpen) closeCraft();
     else if (document.pointerLockElement === canvas) openCraft();
@@ -1898,7 +1908,8 @@ function save(){
       r: [player.yaw, player.pitch],
       sp: [player.spawnX, player.spawnZ],
       hp: player.health, hg: player.hunger, ar: player.air,
-      inv: { apple:inv.apple, wood:inv.wood, stone:inv.stone, coal:inv.coal, iron:inv.iron, gold:inv.gold, diamond:inv.diamond },
+      inv: { apple:inv.apple, wood:inv.wood, stone:inv.stone, coal:inv.coal, iron:inv.iron, gold:inv.gold, diamond:inv.diamond,
+             beef:inv.beef, pork:inv.pork, rotten:inv.rotten, gunpowder:inv.gunpowder },
       hotbar: HOTBAR,
       hotbarCount: player.mode === 'creative' ? null : HOTBAR_COUNT, // Infinity no es JSON válido
       mode: player.mode,
@@ -1921,6 +1932,7 @@ function load(){
     inv.apple = si.apple ?? s.apple ?? 0;
     inv.wood = si.wood||0; inv.stone = si.stone||0; inv.coal = si.coal||0;
     inv.iron = si.iron||0; inv.gold = si.gold||0; inv.diamond = si.diamond||0;
+    inv.beef = si.beef||0; inv.pork = si.pork||0; inv.rotten = si.rotten||0; inv.gunpowder = si.gunpowder||0;
     if (Array.isArray(s.hotbar) && s.hotbar.length) HOTBAR.splice(0, HOTBAR.length, ...s.hotbar);
     player.mode = s.mode === 'creative' ? 'creative' : 'survival';
     if (player.mode === 'creative'){
@@ -2110,15 +2122,21 @@ function respawnPlayer(){
 }
 document.getElementById('respawn').onclick = e => { e.stopPropagation(); respawnPlayer(); };
 
-function eatApple(){
+// come lo primero disponible según FOOD_ITEMS (manzana primero, carne podrida como último recurso)
+function eatFood(){
   const p = player;
-  if (p.dead || inv.apple <= 0 || p.hunger >= p.maxHunger) return;
-  inv.apple--;
-  p.hunger = Math.min(p.maxHunger, p.hunger + 4);
-  sfx(520, 0.09, 0.28, 1.8);
-  sfx(640, 0.09, 0.22, 2.2);
-  toast('Manzana (' + inv.apple + ' restantes)');
-  updateStatusHUD();
+  if (p.dead || p.hunger >= p.maxHunger) return;
+  for(const f of FOOD_ITEMS){
+    if ((inv[f.key]||0) <= 0) continue;
+    inv[f.key]--;
+    p.hunger = Math.min(p.maxHunger, p.hunger + f.restore);
+    sfx(520, 0.09, 0.28, 1.8);
+    sfx(640, 0.09, 0.22, 2.2);
+    toast(DROP_NAME[f.key] + ' (' + inv[f.key] + ' restantes)');
+    updateStatusHUD();
+    return;
+  }
+  toast('No tenés nada para comer');
 }
 
 let regenTimer = 0, starveTimer = 0, drownTimer = 0;
@@ -2296,9 +2314,38 @@ function collideEntity(e, axis, delta){
   }
 }
 
+// botín al morir (no aplica en creativo, no hace falta juntar nada)
+function dropLoot(e){
+  if (player.mode === 'creative') return;
+  const key = MOB_DROP[e.type];
+  if (!key) return;
+  const qty = 1 + (Math.random() < 0.5 ? 1 : 0); // 1-2 unidades, como en Minecraft
+  inv[key] = (inv[key]||0) + qty;
+  toast('+' + qty + ' ' + DROP_NAME[key]);
+}
+// animación de muerte: el mob se tumba, se hunde un poco y se encoge antes de desaparecer
+const DYING = [];
+function playDeathAnim(mesh){
+  DYING.push({ mesh, t:0, dur:0.45 });
+}
+function updateDyingAnims(dt){
+  for(let i=DYING.length-1; i>=0; i--){
+    const d = DYING[i];
+    d.t += dt;
+    const p = Math.min(1, d.t/d.dur);
+    d.mesh.rotation.x = p * 1.4;
+    d.mesh.position.y -= dt*0.6;
+    d.mesh.scale.setScalar(Math.max(0.05, 1 - p*0.7));
+    if (p >= 1){
+      scene.remove(d.mesh);
+      DYING.splice(i,1);
+    }
+  }
+}
 function explodeCreeper(e){
   e.dead = true;
-  scene.remove(e.mesh);
+  scene.remove(e.mesh); // la explosión ya es su propio "efecto de muerte", no necesita la animación de tumbarse
+  dropLoot(e);
   sfx(90, 0.5, 0.5, 0.4);
   spawnParticles(Math.floor(e.pos.x), Math.floor(e.pos.y), Math.floor(e.pos.z), STONE);
   const dx = player.pos.x-e.pos.x, dz = player.pos.z-e.pos.z, dy = player.pos.y-e.pos.y;
@@ -2311,7 +2358,8 @@ function explodeCreeper(e){
 function killEntity(e){
   if (e.dead) return;
   e.dead = true;
-  scene.remove(e.mesh);
+  dropLoot(e);
+  playDeathAnim(e.mesh);
   sfx(120, 0.25, 0.3, 0.6);
 }
 function attackEntity(e){
@@ -2537,7 +2585,7 @@ function frame(now){
   const sy = Math.sin(ang), sx2 = Math.cos(ang);
   dayAmt = clamp01((sy + 0.16) / 0.40);
   const duskAmt = Math.exp(-(sy/0.22)*(sy/0.22)) * clamp01(0.5 + sx2);
-  if (active){ trySpawnMobs(dt); updateEntities(dt); }
+  if (active){ trySpawnMobs(dt); updateEntities(dt); updateDyingAnims(dt); }
   const colHere = columnInfo(Math.floor(player.pos.x), Math.floor(player.pos.z)).h;
   updateAmbient(dayAmt, player.pos.y < colHere - 2);
 
@@ -2609,6 +2657,7 @@ function frame(now){
       `Vida ${player.health.toFixed(1)}/${player.maxHealth}   Hambre ${player.hunger.toFixed(1)}/${player.maxHunger}   Aire ${player.air.toFixed(1)}/${player.maxAir}   Manzanas ${inv.apple}\n` +
       `Entidades ${ENTITIES.length}   Aldeas ${VILLAGES.length}\n` +
       `Madera ${inv.wood}  Piedra ${inv.stone}  Carbón ${inv.coal}  Hierro ${inv.iron}  Oro ${inv.gold}  Diamante ${inv.diamond}\n` +
+      `Carne vaca ${inv.beef}  Carne cerdo ${inv.pork}  Carne podrida ${inv.rotten}  Pólvora ${inv.gunpowder}\n` +
       `Semilla ${SEED}`;
   }
 
