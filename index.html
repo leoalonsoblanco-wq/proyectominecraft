@@ -825,7 +825,7 @@ document.addEventListener('pointerlockchange', () => {
 });
 document.addEventListener('mousemove', e => {
   if (document.pointerLockElement !== canvas) return;
-  const sens = player.inWater ? 0.0022 * 0.5 : 0.0022; // mirar cuesta más bajo el agua: refuerza la densidad
+  const sens = player.inWater ? 0.0022 * 0.85 : 0.0022; // leve, solo un matiz bajo el agua
   player.yaw   -= e.movementX * sens;
   player.pitch -= e.movementY * sens;
   const lim = Math.PI/2 - 0.001;
@@ -942,30 +942,22 @@ function physics(dt){
   const shiftHeld = keys.ShiftLeft || keys.ShiftRight;
   const sprint = shiftHeld && (p.fly || p.hunger > 0);
   let speed = p.inWater
-    ? (p.fly ? (sprint ? 6.5 : 4) : 1.3)                 // nadar: lento incluso volando/buceando
+    ? (p.fly ? (sprint ? 10 : 7) : 2.6)                  // nadar: más lento que caminar, sin ser extremo
     : (p.fly ? (sprint ? 26 : 12) : (sprint ? 8.2 : 4.6));
-  const accel = p.inWater ? 2.2 : (p.onGround || p.fly ? 42 : 12);
+  const accel = p.inWater ? 6 : (p.onGround || p.fly ? 42 : 12);
 
-  if (p.inWater){
-    // el agua frena de inmediato el impulso que traías al entrar (no solo limita el máximo),
-    // para que se note como un fluido denso y no como tierra firme más lenta
-    const waterDragXZ = 3.4;
-    const damp = Math.max(0, 1 - waterDragXZ*dt);
-    p.vel.x *= damp;
-    p.vel.z *= damp;
-  }
   p.vel.x += (dx*speed - p.vel.x) * Math.min(1, accel*dt);
   p.vel.z += (dz*speed - p.vel.z) * Math.min(1, accel*dt);
 
   if (p.inWater){
     // densidad del agua: empuje flotante que compensa parte de la gravedad,
-    // más una fuerte resistencia (arrastre) sobre la velocidad vertical
-    const buoyancy = 12, gravityWater = 10, dragWater = 8.5;
+    // más resistencia (arrastre) sobre la velocidad vertical
+    const buoyancy = 14, gravityWater = 10, dragWater = 5;
     p.vel.y += (buoyancy - gravityWater) * dt;
-    if (keys.Space)  p.vel.y += 10*dt;   // nadar activamente hacia la superficie
-    if (shiftHeld)   p.vel.y -= 10*dt;   // bucear hacia el fondo
+    if (keys.Space)  p.vel.y += 16*dt;   // nadar activamente hacia la superficie
+    if (shiftHeld)   p.vel.y -= 16*dt;   // bucear hacia el fondo
     p.vel.y *= Math.max(0, 1 - dragWater*dt);
-    p.vel.y = Math.max(-1.7, Math.min(1.9, p.vel.y));
+    p.vel.y = Math.max(-2.6, Math.min(2.8, p.vel.y));
   } else if (p.fly){
     let vy = 0;
     if (keys.Space) vy += speed;
@@ -1017,13 +1009,13 @@ function physics(dt){
   let bob = 0, sway = 0.6;
   if (p.inWater){
     // brazada continua de nado: nunca queda quieto como al caminar, siempre "rema" para flotar
-    const t = performance.now()*0.0022;
-    const amp = 0.55 + Math.min(1, swimSpeed/2.0) * 0.45; // brazada notoria incluso quieto en el agua
-    bob = Math.sin(t*2) * 0.15 * amp;
-    sway = 1.7 + Math.abs(Math.sin(t*2)) * 1.2;
-    swimRoll = Math.sin(t*2) * 0.13 * amp;
-    hand.position.set(0.42 + Math.cos(t*2) * 0.11 * amp, -0.34 + bob, -0.62 + Math.abs(bob)*sway);
-    hand.rotation.set(0.25 + Math.sin(t*2) * 0.8 * amp, -0.7 + Math.cos(t*2) * 0.38 * amp, 0.12 + Math.sin(t*2) * 0.18 * amp);
+    const t = performance.now()*0.0026;
+    const amp = 0.4 + Math.min(1, swimSpeed/3) * 0.6; // brazada suave incluso quieto, más marcada al nadar
+    bob = Math.sin(t*2) * 0.09 * amp;
+    sway = 1.3 + Math.abs(Math.sin(t*2)) * 0.7;
+    swimRoll = Math.sin(t*2) * 0.07 * amp;
+    hand.position.set(0.42 + Math.cos(t*2) * 0.06 * amp, -0.34 + bob, -0.62 + Math.abs(bob)*sway);
+    hand.rotation.set(0.25 + Math.sin(t*2) * 0.45 * amp, -0.7 + Math.cos(t*2) * 0.2 * amp, 0.12 + Math.sin(t*2) * 0.08 * amp);
   } else {
     bob = moving && p.onGround ? Math.sin(performance.now()*0.011)*0.018 : 0;
     swimRoll *= 0.9;
