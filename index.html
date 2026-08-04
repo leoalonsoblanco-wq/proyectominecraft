@@ -30,7 +30,8 @@
   #mineBarFill { width:0%; height:100%; background:#e8d24a; }
 
   #hotbar { position:fixed; left:50%; bottom:14px; transform:translateX(-50%);
-            display:flex; gap:4px; padding:4px; background:rgba(0,0,0,.35);
+            display:flex; flex-wrap:wrap; justify-content:center; gap:4px; padding:4px;
+            max-width:96vw; background:rgba(0,0,0,.35);
             border:2px solid rgba(0,0,0,.5); border-radius:4px; pointer-events:none; }
   .slot { width:48px; height:48px; border:2px solid rgba(255,255,255,.18);
           background:rgba(255,255,255,.07); image-rendering:pixelated;
@@ -99,6 +100,14 @@
                       border-bottom:4px solid #2a622a; box-shadow:0 8px 22px rgba(70,180,70,.3); }
   .menuBtn.secondary { background:linear-gradient(180deg,#5f9bc7,#3d6d94); color:#fff;
                         border-bottom:4px solid #294c66; box-shadow:0 8px 22px rgba(60,120,180,.22); }
+  .modeRow { display:flex; gap:10px; justify-content:center; margin-bottom:8px; }
+  .modeBtn { font-size:13px; padding:10px 16px; border-radius:8px; cursor:pointer;
+             letter-spacing:.5px; font-weight:600; display:flex; align-items:center; gap:7px;
+             background:rgba(255,255,255,.06); color:#fff; border:1px solid rgba(255,255,255,.15);
+             transition:all .12s ease; }
+  .modeBtn:hover { background:rgba(255,255,255,.12); }
+  .modeBtn.active { background:linear-gradient(180deg,#e8c34a,#b8912c); color:#241c06;
+                     border-color:transparent; box-shadow:0 6px 16px rgba(200,160,60,.35); }
   .keys { display:grid; grid-template-columns:auto auto; gap:7px 16px; text-align:left;
           font-size:13px; margin:0 auto 22px; width:max-content; max-width:100%; }
   .keys b { font:12px ui-monospace,Consolas,monospace; background:rgba(255,255,255,.12);
@@ -154,6 +163,11 @@
     </div>
     <div id="settingsMenu" class="hide">
       <h1 class="small">AJUSTES</h1>
+      <div class="modeRow">
+        <button id="modeCreative" class="modeBtn"><span class="ic">✦</span> Creativo</button>
+        <button id="modeSurvival" class="modeBtn"><span class="ic">♥</span> Supervivencia</button>
+      </div>
+      <div class="sub" id="modeDesc" style="margin-top:-6px;"></div>
       <div class="sub" style="margin-top:-8px;">controles del juego</div>
       <div class="keys">
         <b>W A S D</b><span>Moverse</span>
@@ -257,7 +271,10 @@ const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
       PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14,
       COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19, LAVA=20, BED=21;
 
-const HOTBAR = [GRASS, STONE, COBBLE, DIRT, SAND, LOG, PLANKS, GLASS, BRICK, LIGHTSTONE];
+const HOTBAR = [0,0,0,0,0,0,0,0,0,0]; // supervivencia: empezás sin nada, hay que minar/craftear
+// creativo: todos los bloques del juego (menos la roca madre, que es especial/indestructible)
+const HOTBAR_CREATIVE = [GRASS, DIRT, STONE, COBBLE, SAND, GRAVEL, SNOW, LOG, LEAVES, PLANKS,
+  GLASS, BRICK, WATER, LAVA, BED, LIGHTSTONE, COAL_ORE, IRON_ORE, GOLD_ORE, DIAMOND_ORE];
 
 /* ============================================================
    1b. CRAFTEO: dureza de bloques, herramientas y recetas
@@ -525,7 +542,7 @@ function toolIcon(id){
   }
   return c.toDataURL();
 }
-function itemIcon(id){ return id < 0 ? toolIcon(id) : blockIcon(id); }
+function itemIcon(id){ if (id === 0) return ''; return id < 0 ? toolIcon(id) : blockIcon(id); }
 
 /* ============================================================
    3. RUIDO Y GENERACIÓN DE TERRENO
@@ -1280,6 +1297,7 @@ const player = {
   air: 20, maxAir: 20,
   invuln: 0, exertion: 0, dead: false,
   spawnX: 8, spawnZ: 8,
+  mode: 'survival',
 };
 const inv = { apple:0, wood:0, stone:0, coal:0, iron:0, gold:0, diamond:0 };
 const keys = Object.create(null);
@@ -1344,6 +1362,42 @@ function showMenuView(name){
   mainMenuEl.classList.toggle('hide', name !== 'main');
   settingsMenuEl.classList.toggle('hide', name !== 'settings');
 }
+
+/* --- modo de juego: creativo (invencible, todos los bloques) o supervivencia (desde cero) --- */
+const statusEl = document.getElementById('status');
+const modeDescEl = document.getElementById('modeDesc');
+const MODE_DESC = {
+  creative: 'Invencible, sin hambre ni ahogo, todos los bloques disponibles y podés volar.',
+  survival: 'Empezás sin nada: miná y crafteá. Vida limitada, te podés ahogar y no volás.',
+};
+function refreshHotbarIcons(){
+  document.querySelectorAll('.slot').forEach((s,i) => { s.style.backgroundImage = `url(${itemIcon(HOTBAR[i])})`; });
+}
+function updateModeButtons(){
+  document.getElementById('modeCreative').classList.toggle('active', player.mode==='creative');
+  document.getElementById('modeSurvival').classList.toggle('active', player.mode==='survival');
+  modeDescEl.textContent = MODE_DESC[player.mode];
+}
+function setGameMode(mode, silent){
+  player.mode = mode;
+  if (mode === 'creative'){
+    HOTBAR.splice(0, HOTBAR.length, ...HOTBAR_CREATIVE);
+    player.fly = true;
+    player.health = player.maxHealth; player.hunger = player.maxHunger; player.air = player.maxAir;
+    statusEl.style.display = 'none';
+  } else {
+    HOTBAR.splice(0, HOTBAR.length, 0,0,0,0,0,0,0,0,0,0);
+    player.fly = false;
+    statusEl.style.display = '';
+  }
+  refreshHotbarIcons();
+  if (typeof setSel === 'function') setSel(Math.min(sel, HOTBAR.length-1));
+  updateModeButtons();
+  if (!silent) toast(mode==='creative' ? 'Modo creativo activado' : 'Modo supervivencia activado');
+}
+document.getElementById('modeCreative').onclick = e => { e.stopPropagation(); setGameMode('creative'); };
+document.getElementById('modeSurvival').onclick = e => { e.stopPropagation(); setGameMode('survival'); };
+
 document.getElementById('play').onclick = e => { e.stopPropagation(); lock(); };
 document.getElementById('openSettings').onclick = e => { e.stopPropagation(); showMenuView('settings'); };
 document.getElementById('closeSettings').onclick = e => { e.stopPropagation(); showMenuView('main'); };
@@ -1387,10 +1441,10 @@ addEventListener('keydown', e => {
   keys[k] = true;
   if (k === 'Space'){
     const now = performance.now();
-    if (now - lastSpace < 280){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
+    if (now - lastSpace < 280 && player.mode === 'creative'){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
     lastSpace = now;
   }
-  if (k === 'KeyF'){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
+  if (k === 'KeyF' && player.mode === 'creative'){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
   if (k === 'KeyE'){ eatApple(); }
   if (k === 'KeyC'){
     if (craftOpen) closeCraft();
@@ -1421,7 +1475,11 @@ function setSel(i){
   sel = i;
   document.querySelectorAll('.slot').forEach((s,n) => s.classList.toggle('sel', n===sel));
   const id = HOTBAR[sel];
-  if (id < 0){
+  if (id === 0){
+    hand.visible = false;
+    handToolGroup.visible = false;
+    toast('Mano vacía');
+  } else if (id < 0){
     const t = TOOL_DEFS[id];
     hand.visible = false;
     handToolGroup.visible = true;
@@ -1647,7 +1705,7 @@ function boxBlocksPlayer(x,y,z){
 let breakCooldown = 0, placeCooldown = 0;
 addEventListener('mousedown', e => {
   if (document.pointerLockElement !== canvas){ return; }
-  if (e.button === 1){
+  if (e.button === 1 && player.mode === 'creative'){ // en supervivencia no se "copian" bloques gratis
     const h = raycast(6);
     if (h){
       const i = HOTBAR.indexOf(h.id);
@@ -1669,24 +1727,45 @@ function activeTool(){
 // tiempo de romper: los bloques "de piedra" son muy lentos a mano y bajan mucho
 // con el pico correcto; el resto no depende de la herramienta
 function miningTime(id){
+  if (player.mode === 'creative') return 0; // creativo: romper instantáneo
   const base = HARDNESS[id] ?? 0.5;
   if (!STONE_CATEGORY.has(id)) return base;
   const tool = activeTool();
   if (!tool || tool.kind !== 'pickaxe') return base*5;
   return base*tool.speed;
 }
+// qué bloque colocable te queda en la mano al minar (en supervivencia): calca a Minecraft en
+// los casos obvios (césped -> tierra, piedra -> adoquín); el resto se devuelve igual a sí mismo
+const PLACEABLE_DROP = {
+  [GRASS]:DIRT, [DIRT]:DIRT, [STONE]:COBBLE, [COBBLE]:COBBLE, [SAND]:SAND, [GRAVEL]:GRAVEL,
+  [SNOW]:SNOW, [LOG]:LOG, [PLANKS]:PLANKS, [GLASS]:GLASS, [BRICK]:BRICK, [BED]:BED,
+};
 function finishBreak(h){
   spawnParticles(h.x, h.y, h.z, h.id);
+  const creative = player.mode === 'creative';
   const tool = activeTool();
   const reqTier = ORE_TIER[h.id] || 0;
-  const canCollect = reqTier===0 || (tool && tool.kind==='pickaxe' && tool.tier >= reqTier);
+  const canCollect = creative || reqTier===0 || (tool && tool.kind==='pickaxe' && tool.tier >= reqTier);
   setBlock(h.x, h.y, h.z, AIR);
   spreadFluidFrom(h.x, h.y, h.z);
   sndBreak(h.id);
+  if (creative) return; // en creativo romper no da nada: ya tenés todos los bloques disponibles
   const key = DROP_MAP[h.id];
   if (key){
     if (canCollect){ inv[key] = (inv[key]||0) + 1; toast('+1 ' + DROP_NAME[key]); }
     else toast('Necesitás un pico mejor para recoger esto');
+  }
+  const placeDrop = PLACEABLE_DROP[h.id];
+  if (placeDrop !== undefined && canCollect){
+    const emptyIdx = HOTBAR.indexOf(0);
+    if (emptyIdx >= 0){
+      HOTBAR[emptyIdx] = placeDrop;
+      const slotEl = document.querySelectorAll('.slot')[emptyIdx];
+      if (slotEl) slotEl.style.backgroundImage = `url(${itemIcon(placeDrop)})`;
+      if (emptyIdx === sel) setSel(sel);
+    } else {
+      toast('Inventario lleno');
+    }
   }
   if (h.id === LEAVES && Math.random() < 0.12){
     inv.apple++;
@@ -1721,7 +1800,7 @@ function doPlace(){
   if (!h) return;
   if (h.id === BED){ trySleep(); return; }
   const heldId = HOTBAR[sel];
-  if (heldId < 0) return; // las herramientas no se colocan
+  if (heldId <= 0) return; // las herramientas no se colocan, y un slot vacío tampoco tiene nada
   const x = h.x + h.nx, y = h.y + h.ny, z = h.z + h.nz;
   const cur = getBlock(x,y,z);
   if (cur !== AIR && !BLOCKS[cur].liquid) return;
@@ -1798,6 +1877,7 @@ function save(){
       hp: player.health, hg: player.hunger, ar: player.air,
       inv: { apple:inv.apple, wood:inv.wood, stone:inv.stone, coal:inv.coal, iron:inv.iron, gold:inv.gold, diamond:inv.diamond },
       hotbar: HOTBAR,
+      mode: player.mode,
       t: dayTime, fly: player.fly, sel
     }));
   } catch(err){ /* cuota llena: se ignora */ }
@@ -1818,8 +1898,9 @@ function load(){
     inv.wood = si.wood||0; inv.stone = si.stone||0; inv.coal = si.coal||0;
     inv.iron = si.iron||0; inv.gold = si.gold||0; inv.diamond = si.diamond||0;
     if (Array.isArray(s.hotbar) && s.hotbar.length) HOTBAR.splice(0, HOTBAR.length, ...s.hotbar);
+    player.mode = s.mode === 'creative' ? 'creative' : 'survival';
     dayTime = s.t ?? 0.28;
-    player.fly = !!s.fly;
+    player.fly = player.mode === 'creative' && !!s.fly;
     sel = s.sel || 0;
     return true;
   }
@@ -1871,8 +1952,10 @@ if (!loaded){
     toast('Te sacamos del agua/lava: apareces en tierra firme');
   }
 }
-// repinta los iconos del hotbar por si la partida guardada trae herramientas crafteadas
-document.querySelectorAll('.slot').forEach((s,i) => { s.style.backgroundImage = `url(${itemIcon(HOTBAR[i])})`; });
+// sincroniza la interfaz con el modo actual (cargado o por defecto) sin tocar el hotbar guardado
+statusEl.style.display = player.mode === 'creative' ? 'none' : '';
+updateModeButtons();
+refreshHotbarIcons();
 setSel(sel);
 hudEl.style.display = 'none';
 addEventListener('beforeunload', save);
@@ -1966,6 +2049,7 @@ function flashDamage(){
 }
 function damagePlayer(amount, cause){
   const p = player;
+  if (p.mode === 'creative') return; // invencible
   if (p.dead || p.invuln > 0 || amount <= 0) return;
   p.invuln = 0.4;
   p.health = Math.max(0, p.health - amount);
@@ -2010,6 +2094,7 @@ let regenTimer = 0, starveTimer = 0, drownTimer = 0;
 function survivalTick(dt){
   const p = player;
   if (p.dead) return;
+  if (p.mode === 'creative'){ p.health=p.maxHealth; p.hunger=p.maxHunger; p.air=p.maxAir; return; }
   p.invuln = Math.max(0, p.invuln - dt);
 
   // aire / ahogamiento
