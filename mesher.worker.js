@@ -106,6 +106,7 @@ function buildMeshData(data, neighbors){
     const id = data[y*CXZ + z*CX + x];
     if (!id) continue;
     const B = BLOCKS[id];
+    if (B.noMesh) continue; // se dibuja como malla aparte en el hilo principal (p. ej. la cama)
     const t = buf[B.layer];
     for(let f=0;f<6;f++){
       const F = FACES[f], d = F.dir;
