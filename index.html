@@ -173,12 +173,13 @@ const BLOCKS = [
   { name:'Mineral de hierro',   t:[17,17,17], opaque:true, layer:0 },
   { name:'Mineral de oro',      t:[18,18,18], opaque:true, layer:0 },
   { name:'Mineral de diamante', t:[19,19,19], opaque:true, layer:0 },
+  { name:'Piedra luminosa', t:[20,20,20], opaque:true, layer:0, light:13 },
 ];
 const AIR=0, GRASS=1, DIRT=2, STONE=3, COBBLE=4, SAND=5, LOG=6, LEAVES=7,
       PLANKS=8, GLASS=9, WATER=10, BEDROCK=11, SNOW=12, BRICK=13, GRAVEL=14,
-      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18;
+      COAL_ORE=15, IRON_ORE=16, GOLD_ORE=17, DIAMOND_ORE=18, LIGHTSTONE=19;
 
-const HOTBAR = [GRASS, STONE, COBBLE, DIRT, SAND, LOG, PLANKS, GLASS, BRICK];
+const HOTBAR = [GRASS, STONE, COBBLE, DIRT, SAND, LOG, PLANKS, GLASS, BRICK, LIGHTSTONE];
 
 /* ============================================================
    2. ATLAS DE TEXTURAS (dibujado por código, sin archivos)
@@ -290,6 +291,10 @@ const TILE_DRAW = [
   (g,rnd,px)=>{ noisyFill(g,rnd,px,128,128,132,0.16);
     for(let i=0;i<7;i++){ const cx=rnd()*TILE|0, cy=rnd()*TILE|0;
       for(let j=0;j<4;j++) px(Math.min(TILE-1,Math.max(0,cx+((rnd()*5|0)-2))), Math.min(TILE-1,Math.max(0,cy+((rnd()*5|0)-2))), shade(96,224,224,1)); } },
+  // 20 piedra luminosa (bloque de luz colocable)
+  (g,rnd,px)=>{ noisyFill(g,rnd,px,255,241,196,0.1);
+    for(let i=0;i<40;i++) px(rnd()*TILE|0,rnd()*TILE|0,shade(255,214,120,1));
+    g.fillStyle='rgba(255,255,255,.5)'; g.fillRect(10,10,12,12); },
 ];
 
 function buildAtlas(){
@@ -330,7 +335,7 @@ const ATLAS = buildAtlas();
 const mesherWorker = new Worker('mesher.worker.js');
 mesherWorker.postMessage({
   type: 'init', CX, CY, CZ, CXZ, BEDROCK,
-  BLOCKS: BLOCKS.map(b => b ? { opaque:b.opaque, layer:b.layer, t:b.t } : null),
+  BLOCKS: BLOCKS.map(b => b ? { opaque:b.opaque, layer:b.layer, t:b.t, light:b.light||0 } : null),
   TILEUV,
 });
 let meshReqSeq = 0;
@@ -1024,7 +1029,7 @@ addEventListener('keydown', e => {
   if (k === 'KeyF'){ player.fly = !player.fly; player.vel.y = 0; toast(player.fly ? 'Modo vuelo activado' : 'Modo vuelo desactivado'); }
   if (k === 'KeyE'){ eatApple(); }
   if (k === 'F3'){ showDebug = !showDebug; hudEl.style.display = showDebug ? '' : 'none'; e.preventDefault(); }
-  if (k.startsWith('Digit')){ const n = +k.slice(5); if (n>=1 && n<=9) setSel(n-1); }
+  if (k.startsWith('Digit')){ const n = +k.slice(5); if (n>=1 && n<=9) setSel(n-1); else if (n===0) setSel(9); }
   if (k === 'BracketLeft')  setRenderDist(RENDER_DIST-1);
   if (k === 'BracketRight') setRenderDist(RENDER_DIST+1);
 });
